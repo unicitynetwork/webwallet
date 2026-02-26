@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-The Unicity WEB GUI Wallet (v0.4.9) is a self-contained, browser-based cryptocurrency wallet for the Unicity network. The entire application runs in a single HTML file (`index.html`, ~14,000 lines) with embedded JavaScript and CSS, requiring no build process. It supports the Alpha cryptocurrency on the consensus layer (PoW blockchain).
+The Unicity WEB GUI Wallet (v0.4.10) is a self-contained, browser-based cryptocurrency wallet for the Unicity network. The entire application runs in a single HTML file (`index.html`, ~14,000 lines) with embedded JavaScript and CSS, requiring no build process. It supports the Alpha cryptocurrency on the consensus layer (PoW blockchain).
 
 ## Development Commands
 

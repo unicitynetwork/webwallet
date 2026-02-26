@@ -661,7 +661,7 @@
 </head>
 <body>
     <!-- Version Number -->
-    <div style="position: fixed; top: 10px; right: 10px; font-size: 10px; color: #999; z-index: 1000; font-family: monospace;">v0.4.9</div>
+    <div style="position: fixed; top: 10px; right: 10px; font-size: 10px; color: #999; z-index: 1000; font-family: monospace;">v0.4.10</div>
     
     <!-- Notification Container -->
     <div id="notificationContainer" class="notification-container"></div>
@@ -817,7 +817,7 @@
                     <circle cx="12" cy="12" r="2"></circle>
                     <path d="M6 12h.01M18 12h.01"></path>
                 </svg>
-                Unicity WEB GUI Wallet v0.4.9
+                Unicity WEB GUI Wallet v0.4.10
             </h1>
         </div>
         
@@ -1720,6 +1720,9 @@ Anyone with your master private key can access all your funds.`;
 
             // Direct balance from Fulcrum for verification
             let fulcrumDirectBalance = 0n;
+
+            // Server-side vesting: true when connected Fulcrum provides vesting fields
+            let serverProvidesVesting = false;
             let balanceRetryCount = 0;
             const MAX_BALANCE_RETRIES = 10;
             const BALANCE_RETRY_INTERVAL = 2000;
@@ -3662,6 +3665,12 @@ Anyone with your master private key can access all your funds.`;
                 // Clear existing queue (new batch = fresh start)
                 utxoProcessingQueue.length = 0;
 
+                // Auto-detect server vesting support from UTXO data
+                if (!serverProvidesVesting && utxos.length > 0 && utxos[0].vested !== undefined) {
+                    serverProvidesVesting = true;
+                    console.log('[ServerVesting] Detected server-side vesting support from UTXO data');
+                }
+
                 console.log(`[TxoQueue] Processing ${utxos.length} UTXOs for ${forAddress}`);
 
                 // Fetch Fulcrum direct balance for verification
@@ -3671,6 +3680,39 @@ Anyone with your master private key can access all your funds.`;
                 const spinner = document.getElementById('balanceVerificationSpinner');
                 if (spinner) spinner.style.display = 'inline';
 
+                if (serverProvidesVesting) {
+                    // SERVER-SIDE VESTING: instant classification from Fulcrum data
+                    for (const utxo of utxos) {
+                        const isVested = utxo.vested === true;
+                        const classification = {
+                            isVested: isVested,
+                            coinbaseHeight: utxo.coinbase_height ?? null
+                        };
+                        // Populate in-memory cache
+                        const utxoKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
+                        txoClassificationCache.set(utxoKey, classification);
+                        if (isVested) {
+                            runningVestedBalance += BigInt(utxo.value);
+                        } else {
+                            runningUnvestedBalance += BigInt(utxo.value);
+                        }
+                    }
+                    // Persist batch to IndexedDB
+                    const entries = utxos.map(u => ({
+                        key: `${u.tx_hash}:${u.tx_pos}`,
+                        classification: { isVested: u.vested === true, coinbaseHeight: u.coinbase_height ?? null }
+                    }));
+                    batchPersistTxosToIndexedDB(entries);
+
+                    updateVestingBalanceDisplayRealtime();
+                    syncToAddressVestingCacheFromUtxos(utxos, forAddress);
+                    // Hide spinner immediately - no async work needed
+                    if (spinner) spinner.style.display = 'none';
+                    console.log(`[ServerVesting] Instant classification: ${utxos.length} UTXOs (vested: ${SatoshiMath.satoshisToAlpha(runningVestedBalance)}, unvested: ${SatoshiMath.satoshisToAlpha(runningUnvestedBalance)})`);
+                    return;
+                }
+
+                // LEGACY: fall back to queue-based client-side tracing
                 for (const utxo of utxos) {
                     const utxoKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
 
@@ -3937,6 +3979,39 @@ Anyone with your master private key can access all your funds.`;
             }
 
             /**
+             * Sync addressVestingCache from server-classified UTXOs (no tracing needed)
+             * @param {Array} utxos - UTXOs with server-provided vested field
+             * @param {string} address - The address these UTXOs belong to
+             */
+            function syncToAddressVestingCacheFromUtxos(utxos, address) {
+                if (!address) return;
+                const addressCache = getAddressVestingCache(address);
+                if (!addressCache) return;
+                const vested = [];
+                const unvested = [];
+                const all = [];
+
+                for (const utxo of utxos) {
+                    all.push(utxo);
+                    if (utxo.vested === true) {
+                        vested.push(utxo);
+                    } else {
+                        unvested.push(utxo);
+                    }
+                }
+
+                addressCache.classifiedUtxos = { vested, unvested, all };
+                addressCache.vestingBalances = {
+                    vested: runningVestedBalance,
+                    unvested: runningUnvestedBalance,
+                    all: fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (runningVestedBalance + runningUnvestedBalance)
+                };
+
+                // Update static display
+                updateVestingBalanceDisplay();
+            }
+
+            /**
              * Clear classification queue (e.g., on wallet switch)
              */
             function clearClassificationQueue() {
@@ -4001,6 +4076,16 @@ Anyone with your master private key can access all your funds.`;
                     if (result && result.confirmed !== undefined) {
                         fulcrumDirectBalance = BigInt(result.confirmed);
                         console.log(`[BalanceVerify] Fulcrum direct balance: ${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA`);
+
+                        // Detect and use server-side vesting data from get_balance
+                        if (result.confirmed_vested !== undefined) {
+                            serverProvidesVesting = true;
+                            runningVestedBalance = BigInt(result.confirmed_vested);
+                            runningUnvestedBalance = BigInt(result.confirmed_unvested || 0);
+                            console.log(`[ServerVesting] Balance from server: vested=${SatoshiMath.satoshisToAlpha(runningVestedBalance)}, unvested=${SatoshiMath.satoshisToAlpha(runningUnvestedBalance)}`);
+                            updateVestingBalanceDisplayRealtime();
+                        }
+
                         checkBalanceVerification();
                     }
                 });
@@ -7953,6 +8038,7 @@ Anyone with your master private key can access all your funds.`;
                         // CRITICAL FIX: Clear the socket reference to prevent stale connections
                         electrumSocket = null;
                         electrumConnected = false;
+                        serverProvidesVesting = false;
                         currentScriptHashSubscription = null;
                         headerSubscriptionActive = false;
                         isInitialLoad = true;  // Reset for next connection
@@ -8076,6 +8162,7 @@ Anyone with your master private key can access all your funds.`;
                 }
 
                 electrumConnected = false;
+                serverProvidesVesting = false;
                 electrumCallbacks = {};
                 updateUtxoListDisplay(); // Update UTXO list display when disconnected
 
@@ -8902,6 +8989,11 @@ Anyone with your master private key can access all your funds.`;
              * This runs asynchronously after UTXOs are fetched
              */
             async function classifyAllUtxos() {
+                if (serverProvidesVesting) {
+                    console.log('[ServerVesting] Skipping client-side classification (server provides vesting)');
+                    return;
+                }
+
                 if (vestingClassificationInProgress) {
                     console.log('Vesting classification already in progress');
                     return;
@@ -12230,6 +12322,14 @@ Anyone with your master private key can access all your funds.`;
                             nextItem.status = 'complete';
                             nextItem.result = 'Already in mempool';
                             nextItem.completedAt = new Date().toISOString();
+                        } else if (error.message && error.message.includes('already in block')) {
+                            // Transaction already confirmed on blockchain - this is success, not failure
+                            nextItem.status = 'complete';
+                            nextItem.result = 'Already confirmed in blockchain';
+                            nextItem.completedAt = new Date().toISOString();
+                            broadcastDebug.log('success', 'Transaction already confirmed on blockchain', {
+                                txid: nextItem.tx.txid
+                            });
                         } else if (nextItem.attempts >= 3) {
                             // Max retries reached
                             nextItem.status = 'failed';
@@ -14056,7 +14156,7 @@ Anyone with your master private key can access all your funds.`;
                 sessions: transactionDebugLog,
                 readyToImport: failedTxs,
                 metadata: {
-                    walletVersion: 'v0.4.9',
+                    walletVersion: 'v0.4.10',
                     timestamp: new Date().toISOString(),
                     userAgent: navigator.userAgent,
                     totalSessions: transactionDebugLog.length,
