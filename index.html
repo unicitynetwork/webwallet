@@ -8680,13 +8680,16 @@ Anyone with your master private key can access all your funds.`;
                             
                             updateUtxoListDisplay();
                             updateCommonBalance(); // This will update Send button state
+
+                            // Process UTXOs through server-aware classification
+                            processIncomingUtxos(currentUtxos, address);
                         }
-                        
+
                         // Also update UTXO list display after fetching UTXOs
                         updateUtxoListDisplay();
                     }
                 });
-                
+
                 // Also fetch transaction history
                 electrumRequest('blockchain.scripthash.get_history', [scriptHash], function(result) {
                     if (result !== null && result !== undefined) {
@@ -8980,7 +8983,8 @@ Anyone with your master private key can access all your funds.`;
 
                 // Trigger vesting classification if connected
                 if (electrumConnected && currentUtxos && currentUtxos.length > 0) {
-                    classifyAllUtxos();
+                    const currentAddress = getCurrentVestingAddress();
+                    processIncomingUtxos(currentUtxos, currentAddress);
                 }
             }
 
