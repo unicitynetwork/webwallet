@@ -661,7 +661,7 @@
 </head>
 <body>
     <!-- Version Number -->
-    <div style="position: fixed; top: 10px; right: 10px; font-size: 10px; color: #999; z-index: 1000; font-family: monospace;">v0.4.10</div>
+    <div style="position: fixed; top: 10px; right: 10px; font-size: 10px; color: #999; z-index: 1000; font-family: monospace;">v0.5.0</div>
     
     <!-- Notification Container -->
     <div id="notificationContainer" class="notification-container"></div>
@@ -817,7 +817,7 @@
                     <circle cx="12" cy="12" r="2"></circle>
                     <path d="M6 12h.01M18 12h.01"></path>
                 </svg>
-                Unicity WEB GUI Wallet v0.4.10
+                Unicity WEB GUI Wallet v0.5.0
             </h1>
         </div>
         
@@ -4153,6 +4153,14 @@ Anyone with your master private key can access all your funds.`;
                 const countedBalance = runningVestedBalance + runningUnvestedBalance;
                 const spinner = document.getElementById('balanceVerificationSpinner');
 
+                // Skip verification until Fulcrum direct balance has been fetched.
+                // Without this guard, the async fetchFulcrumDirectBalance hasn't returned yet
+                // and fulcrumDirectBalance is 0n, causing a false "overshoot" retry cascade.
+                if (fulcrumDirectBalance === 0n && countedBalance > 0n) {
+                    console.log('[BalanceVerify] Waiting for Fulcrum direct balance fetch...');
+                    return;
+                }
+
                 console.log(`[BalanceVerify] Counted: ${SatoshiMath.satoshisToAlpha(countedBalance)} ALPHA, Fulcrum: ${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA`);
 
                 if (countedBalance === fulcrumDirectBalance) {
@@ -4186,19 +4194,13 @@ Anyone with your master private key can access all your funds.`;
                 setTimeout(() => {
                     const currentAddress = getCurrentVestingAddress();
                     if (currentAddress) {
-                        // Reset running balances
-                        runningVestedBalance = 0n;
-                        runningUnvestedBalance = 0n;
-                        unconfirmedVestedBalance = 0n;
-                        unconfirmedUnvestedBalance = 0n;
-
-                        // Re-fetch both balance and UTXOs
+                        // Re-fetch Fulcrum direct balance
                         fetchFulcrumDirectBalance(currentAddress);
-                        // Use the correct refresh function for the current mode
-                        if (watchOnlyMode && watchOnlyAddressValue) {
-                            refreshWatchOnlyBalance(watchOnlyAddressValue);
-                        } else {
-                            refreshBalance();
+                        // Force reclassification from current UTXOs (processIncomingUtxos
+                        // resets running balances internally). This bypasses the
+                        // hasUtxoArrayChanged guard which would otherwise skip reprocessing.
+                        if (currentUtxos && currentUtxos.length > 0) {
+                            processIncomingUtxos(currentUtxos, currentAddress);
                         }
                     }
                 }, BALANCE_RETRY_INTERVAL);
@@ -14326,7 +14328,7 @@ Anyone with your master private key can access all your funds.`;
                 sessions: transactionDebugLog,
                 readyToImport: failedTxs,
                 metadata: {
-                    walletVersion: 'v0.4.10',
+                    walletVersion: 'v0.5.0',
                     timestamp: new Date().toISOString(),
                     userAgent: navigator.userAgent,
                     totalSessions: transactionDebugLog.length,
