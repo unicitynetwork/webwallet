@@ -629,11 +629,11 @@
         }
 
         .vesting-color-vested {
-            color: #4CAF50;
+            color: #ef4444;
         }
 
         .vesting-color-unvested {
-            color: #FF9800;
+            color: #4CAF50;
         }
 
         .vesting-row-all .vesting-mode-name {
@@ -646,11 +646,11 @@
         }
 
         .vesting-row-vested.selected {
-            background-color: rgba(76, 175, 80, 0.08);
+            background-color: rgba(239, 68, 68, 0.08);
         }
 
         .vesting-row-unvested.selected {
-            background-color: rgba(255, 152, 0, 0.08);
+            background-color: rgba(76, 175, 80, 0.08);
         }
 
         @keyframes spin {
@@ -9222,6 +9222,7 @@ Anyone with your master private key can access all your funds.`;
                 const txDiv = document.createElement('div');
                 txDiv.style.cssText = 'padding: 15px; border-bottom: 1px solid #e9ecef; font-size: 14px;';
                 txDiv.setAttribute('data-txid', txid);
+                txDiv.setAttribute('data-vesting', 'pending');
                 
                 let statusColor = confirmations > 0 ? '#34d399' : '#fbbf24';
                 let statusText = confirmations > 0 ? `${confirmations} confirmations` : 'Unconfirmed';
@@ -9239,6 +9240,9 @@ Anyone with your master private key can access all your funds.`;
                 let amountColor = '#9ca3af';
                 let amountSign = '';
                 
+                // Vesting status for this transaction: 'vested', 'unvested', 'mixed', or 'unknown'
+                let vestingStatus = 'unknown';
+
                 if (!isLoading) {
                     // Calculate net amount and direction from full transaction details
                     const result = calculateTransactionAmount(txDetails, ourAddress);
@@ -9246,7 +9250,23 @@ Anyone with your master private key can access all your funds.`;
                     amount = SatoshiMath.satoshisToAlpha(Math.abs(result.netAmount));
                     destinations = result.destinations;
                     senderAddress = result.senderAddress;
-                    
+
+                    // Determine vesting status from our outputs in this transaction
+                    if (result.ourOutputs && result.ourOutputs.length > 0) {
+                        let hasVested = false, hasUnvested = false;
+                        for (const out of result.ourOutputs) {
+                            const cacheKey = `${txid}:${out.vout}`;
+                            const cached = txoClassificationCache.get(cacheKey);
+                            if (cached) {
+                                if (cached.isVested) hasVested = true;
+                                else hasUnvested = true;
+                            }
+                        }
+                        if (hasVested && hasUnvested) vestingStatus = 'mixed';
+                        else if (hasVested) vestingStatus = 'vested';
+                        else if (hasUnvested) vestingStatus = 'unvested';
+                    }
+
                     // Set direction text and colors based on transaction type
                     if (!ourAddress) {
                         // No wallet loaded - show neutral transaction
@@ -9304,6 +9324,28 @@ Anyone with your master private key can access all your funds.`;
                     }
                 }
                 
+                // Vesting visual indicators
+                const vestingColors = {
+                    vested: '#ef4444',
+                    unvested: '#4CAF50',
+                    mixed: '#2196F3',
+                    unknown: '#fbbf24'
+                };
+                const vestingLabels = {
+                    vested: 'Locked',
+                    unvested: 'Unlocked',
+                    mixed: 'Mixed',
+                    unknown: 'Unknown'
+                };
+                const borderColor = vestingColors[vestingStatus] || vestingColors.unknown;
+                const vestingLabel = vestingLabels[vestingStatus] || '';
+
+                txDiv.style.borderLeft = `3px solid ${borderColor}`;
+                txDiv.setAttribute('data-vesting', vestingStatus);
+
+                const vestingBadgeHtml = vestingLabel ?
+                    `<span style="font-size: 10px; padding: 1px 6px; border-radius: 3px; background-color: ${borderColor}20; color: ${borderColor}; font-weight: 600; margin-left: 8px;">${vestingLabel}</span>` : '';
+
                 txDiv.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: start;">
                         <div style="flex: 1;">
@@ -9314,6 +9356,7 @@ Anyone with your master private key can access all your funds.`;
                                 <a href="${txLink}" target="_blank" style="font-family: monospace; font-size: 12px; color: #3b82f6; text-decoration: none;">
                                     ${truncatedTxid}
                                 </a>
+                                ${vestingBadgeHtml}
                             </div>
                             <div style="color: #666; font-size: 12px;">
                                 <span style="color: ${statusColor};">${statusText}</span>
@@ -10313,18 +10356,35 @@ Anyone with your master private key can access all your funds.`;
                     // Check if this UTXO is consumed
                     const utxoKey = `${txid}:${vout}`;
                     const isConsumed = consumedUtxos.has(utxoKey);
-                    
+
+                    // Determine UTXO vesting status from cache
+                    const utxoClassification = txoClassificationCache.get(utxoKey);
+                    let utxoVestingColor = '#fbbf24'; // yellow = unknown
+                    let utxoVestingLabel = '';
+                    if (utxoClassification) {
+                        if (utxoClassification.isVested) {
+                            utxoVestingColor = '#ef4444'; // red = locked
+                            utxoVestingLabel = 'Locked';
+                        } else {
+                            utxoVestingColor = '#4CAF50'; // green = unlocked
+                            utxoVestingLabel = 'Unlocked';
+                        }
+                    }
+
                     // Style based on consumption status
                     if (isConsumed) {
-                        utxoDiv.style.cssText = 'padding: 8px; background-color: #e5e7eb; border-radius: 4px; margin-bottom: 6px; font-size: 11px; opacity: 0.6;';
+                        utxoDiv.style.cssText = `padding: 8px; background-color: #e5e7eb; border-radius: 4px; margin-bottom: 6px; font-size: 11px; opacity: 0.6; border-left: 3px solid ${utxoVestingColor};`;
                     } else {
-                        utxoDiv.style.cssText = 'padding: 8px; background-color: #f8f9fa; border-radius: 4px; margin-bottom: 6px; font-size: 11px;';
+                        utxoDiv.style.cssText = `padding: 8px; background-color: #f8f9fa; border-radius: 4px; margin-bottom: 6px; font-size: 11px; border-left: 3px solid ${utxoVestingColor};`;
                     }
-                    
+
+                    const utxoBadgeHtml = utxoVestingLabel ?
+                        `<span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background-color: ${utxoVestingColor}20; color: ${utxoVestingColor}; font-weight: 600; margin-left: 6px;">${utxoVestingLabel}</span>` : '';
+
                     utxoDiv.innerHTML = `
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div style="flex: 1;">
-                                <div style="font-weight: 600; color: ${isConsumed ? '#6b7280' : '#06d6a0'};">${amount} ALPHA${source}${isConsumed ? ' (pending)' : ''}</div>
+                                <div style="font-weight: 600; color: ${isConsumed ? '#6b7280' : '#06d6a0'};">${amount} ALPHA${source}${isConsumed ? ' (pending)' : ''}${utxoBadgeHtml}</div>
                                 <div style="font-family: monospace; color: #666; word-break: break-all;">
                                     ${txid}:${vout}
                                 </div>
