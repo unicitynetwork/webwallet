@@ -3665,13 +3665,16 @@ Anyone with your master private key can access all your funds.`;
                 // Clear existing queue (new batch = fresh start)
                 utxoProcessingQueue.length = 0;
 
+                // Check if these UTXOs have server-provided vesting fields
+                const utxosHaveVestingField = utxos.length > 0 && utxos.some(u => u.vested !== undefined);
+
                 // Auto-detect server vesting support from UTXO data
-                if (!serverProvidesVesting && utxos.length > 0 && utxos[0].vested !== undefined) {
+                if (!serverProvidesVesting && utxosHaveVestingField) {
                     serverProvidesVesting = true;
                     console.log('[ServerVesting] Detected server-side vesting support from UTXO data');
                 }
 
-                console.log(`[TxoQueue] Processing ${utxos.length} UTXOs for ${forAddress}`);
+                console.log(`[TxoQueue] Processing ${utxos.length} UTXOs for ${forAddress} (serverVesting=${serverProvidesVesting}, utxosHaveField=${utxosHaveVestingField})`);
 
                 // Fetch Fulcrum direct balance for verification
                 fetchFulcrumDirectBalance(forAddress);
@@ -3680,7 +3683,7 @@ Anyone with your master private key can access all your funds.`;
                 const spinner = document.getElementById('balanceVerificationSpinner');
                 if (spinner) spinner.style.display = 'inline';
 
-                if (serverProvidesVesting) {
+                if (serverProvidesVesting && utxosHaveVestingField) {
                     // SERVER-SIDE VESTING: instant classification from Fulcrum data
                     for (const utxo of utxos) {
                         const isVested = utxo.vested === true;
@@ -3706,9 +3709,19 @@ Anyone with your master private key can access all your funds.`;
 
                     updateVestingBalanceDisplayRealtime();
                     syncToAddressVestingCacheFromUtxos(utxos, forAddress);
+                    // Refresh UTXO list to show vesting colors
+                    updateUtxoListDisplay();
                     // Hide spinner immediately - no async work needed
                     if (spinner) spinner.style.display = 'none';
                     console.log(`[ServerVesting] Instant classification: ${utxos.length} UTXOs (vested: ${SatoshiMath.satoshisToAlpha(runningVestedBalance)}, unvested: ${SatoshiMath.satoshisToAlpha(runningUnvestedBalance)})`);
+                    return;
+                }
+
+                // Server provides vesting but these UTXOs are stale (from cache/previous session)
+                // Skip classification — fresh listunspent response will have the vesting fields
+                if (serverProvidesVesting && !utxosHaveVestingField) {
+                    console.log(`[ServerVesting] Skipping classification: UTXOs lack vesting fields (stale data), waiting for fresh server response`);
+                    if (spinner) spinner.style.display = 'none';
                     return;
                 }
 
@@ -8648,45 +8661,38 @@ Anyone with your master private key can access all your funds.`;
                 // Fetch UTXOs
                 electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                     if (result !== null && result !== undefined) {
-                        // Always update if UTXOs changed OR if we cleared them OR if result is empty
-                        const shouldUpdate = hasArrayChanged(currentUtxos, result) || currentUtxos.length === 0 || result.length === 0;
-                        if (shouldUpdate) {
-                            // Add address to each UTXO
-                            currentUtxos = result.map(utxo => ({
-                                ...utxo,
-                                address: address
-                            }));
-                            
-                            // Calculate balances using BigInt for precision
-                            let confirmed = 0n;
-                            let unconfirmed = 0n;
+                        // Always update currentUtxos from server (picks up new fields like vested)
+                        currentUtxos = result.map(utxo => ({
+                            ...utxo,
+                            address: address
+                        }));
 
-                            result.forEach(utxo => {
-                                if (utxo.height > 0) {
-                                    confirmed += BigInt(utxo.value);
-                                } else {
-                                    unconfirmed += BigInt(utxo.value);
-                                }
-                            });
+                        // Calculate balances using BigInt for precision
+                        let confirmed = 0n;
+                        let unconfirmed = 0n;
 
-                            // Update display - use Fulcrum's direct balance when available
-                            const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : confirmed;
-                            watchOnlyBalance.textContent = SatoshiMath.satoshisToAlpha(displayBalance) + ' ALPHA';
-                            if (unconfirmed > 0n) {
-                                watchOnlyUnconfirmed.textContent = '(' + SatoshiMath.satoshisToAlpha(unconfirmed) + ')';
+                        result.forEach(utxo => {
+                            if (utxo.height > 0) {
+                                confirmed += BigInt(utxo.value);
                             } else {
-                                watchOnlyUnconfirmed.textContent = '';
+                                unconfirmed += BigInt(utxo.value);
                             }
-                            
-                            updateUtxoListDisplay();
-                            updateCommonBalance(); // This will update Send button state
+                        });
 
-                            // Process UTXOs through server-aware classification
-                            processIncomingUtxos(currentUtxos, address);
+                        // Update display - use Fulcrum's direct balance when available
+                        const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : confirmed;
+                        watchOnlyBalance.textContent = SatoshiMath.satoshisToAlpha(displayBalance) + ' ALPHA';
+                        if (unconfirmed > 0n) {
+                            watchOnlyUnconfirmed.textContent = '(' + SatoshiMath.satoshisToAlpha(unconfirmed) + ')';
+                        } else {
+                            watchOnlyUnconfirmed.textContent = '';
                         }
 
-                        // Also update UTXO list display after fetching UTXOs
                         updateUtxoListDisplay();
+                        updateCommonBalance(); // This will update Send button state
+
+                        // Process UTXOs through server-aware classification
+                        processIncomingUtxos(currentUtxos, address);
                     }
                 });
 
@@ -8981,11 +8987,6 @@ Anyone with your master private key can access all your funds.`;
                 // Handle watch-only mode visibility
                 updateWatchOnlyMode();
 
-                // Trigger vesting classification if connected
-                if (electrumConnected && currentUtxos && currentUtxos.length > 0) {
-                    const currentAddress = getCurrentVestingAddress();
-                    processIncomingUtxos(currentUtxos, currentAddress);
-                }
             }
 
             /**
@@ -9324,23 +9325,23 @@ Anyone with your master private key can access all your funds.`;
                     }
                 }
                 
-                // Vesting visual indicators
+                // Vesting visual indicators (only for classified outputs)
                 const vestingColors = {
                     vested: '#ef4444',
                     unvested: '#4CAF50',
-                    mixed: '#2196F3',
-                    unknown: '#fbbf24'
+                    mixed: '#2196F3'
                 };
                 const vestingLabels = {
                     vested: 'Locked',
                     unvested: 'Unlocked',
-                    mixed: 'Mixed',
-                    unknown: 'Unknown'
+                    mixed: 'Mixed'
                 };
-                const borderColor = vestingColors[vestingStatus] || vestingColors.unknown;
+                const borderColor = vestingColors[vestingStatus] || null;
                 const vestingLabel = vestingLabels[vestingStatus] || '';
 
-                txDiv.style.borderLeft = `3px solid ${borderColor}`;
+                if (borderColor) {
+                    txDiv.style.borderLeft = `3px solid ${borderColor}`;
+                }
                 txDiv.setAttribute('data-vesting', vestingStatus);
 
                 const vestingBadgeHtml = vestingLabel ?
@@ -9647,6 +9648,7 @@ Anyone with your master private key can access all your funds.`;
                     isIncoming,
                     netAmount: Math.abs(netAmount),
                     destinations,
+                    ourOutputs,
                     senderAddress,
                     fromAddresses
                 };
@@ -10359,7 +10361,7 @@ Anyone with your master private key can access all your funds.`;
 
                     // Determine UTXO vesting status from cache
                     const utxoClassification = txoClassificationCache.get(utxoKey);
-                    let utxoVestingColor = '#fbbf24'; // yellow = unknown
+                    let utxoVestingColor = null;
                     let utxoVestingLabel = '';
                     if (utxoClassification) {
                         if (utxoClassification.isVested) {
@@ -10371,11 +10373,12 @@ Anyone with your master private key can access all your funds.`;
                         }
                     }
 
+                    const borderStyle = utxoVestingColor ? `border-left: 3px solid ${utxoVestingColor};` : '';
                     // Style based on consumption status
                     if (isConsumed) {
-                        utxoDiv.style.cssText = `padding: 8px; background-color: #e5e7eb; border-radius: 4px; margin-bottom: 6px; font-size: 11px; opacity: 0.6; border-left: 3px solid ${utxoVestingColor};`;
+                        utxoDiv.style.cssText = `padding: 8px; background-color: #e5e7eb; border-radius: 4px; margin-bottom: 6px; font-size: 11px; opacity: 0.6; ${borderStyle}`;
                     } else {
-                        utxoDiv.style.cssText = `padding: 8px; background-color: #f8f9fa; border-radius: 4px; margin-bottom: 6px; font-size: 11px; border-left: 3px solid ${utxoVestingColor};`;
+                        utxoDiv.style.cssText = `padding: 8px; background-color: #f8f9fa; border-radius: 4px; margin-bottom: 6px; font-size: 11px; ${borderStyle}`;
                     }
 
                     const utxoBadgeHtml = utxoVestingLabel ?
@@ -11281,20 +11284,17 @@ Anyone with your master private key can access all your funds.`;
                         // Store UTXOs
                         electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                             if (result) {
-                                // Only update if UTXOs changed
-                                if (hasArrayChanged(currentUtxos, result)) {
-                                    const currentAddress = wallet.addresses[0].address;
-                                    // Add address to each UTXO
-                                    currentUtxos = result.map(utxo => ({
-                                        ...utxo,
-                                        address: currentAddress
-                                    }));
-                                    updateCommonBalance();
-                                    updateUtxoListDisplay();
+                                const currentAddress = wallet.addresses[0].address;
+                                // Always update currentUtxos from server (picks up new fields like vested)
+                                currentUtxos = result.map(utxo => ({
+                                    ...utxo,
+                                    address: currentAddress
+                                }));
+                                updateCommonBalance();
+                                updateUtxoListDisplay();
 
-                                    // NEW: Process UTXOs through queue-based classification system
-                                    processIncomingUtxos(currentUtxos, currentAddress);
-                                }
+                                // Process UTXOs through server-aware classification
+                                processIncomingUtxos(currentUtxos, currentAddress);
                             }
                         });
                     }
