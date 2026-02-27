@@ -1717,6 +1717,9 @@ Anyone with your master private key can access all your funds.`;
             // Running balance totals (BigInt for precision) - updated during classification
             let runningVestedBalance = 0n;
             let runningUnvestedBalance = 0n;
+            // Unconfirmed (mempool) portions of vested/unvested balances
+            let unconfirmedVestedBalance = 0n;
+            let unconfirmedUnvestedBalance = 0n;
 
             // Direct balance from Fulcrum for verification
             let fulcrumDirectBalance = 0n;
@@ -3661,12 +3664,15 @@ Anyone with your master private key can access all your funds.`;
                 // Reset running balances for this batch
                 runningVestedBalance = 0n;
                 runningUnvestedBalance = 0n;
+                unconfirmedVestedBalance = 0n;
+                unconfirmedUnvestedBalance = 0n;
 
                 // Clear existing queue (new batch = fresh start)
                 utxoProcessingQueue.length = 0;
 
                 // Check if these UTXOs have server-provided vesting fields
-                const utxosHaveVestingField = utxos.length > 0 && utxos.some(u => u.vested !== undefined);
+                // Use strict boolean check — null/undefined means "not provided"
+                const utxosHaveVestingField = utxos.length > 0 && utxos.some(u => typeof u.vested === 'boolean');
 
                 // Auto-detect server vesting support from UTXO data
                 if (!serverProvidesVesting && utxosHaveVestingField) {
@@ -3683,22 +3689,30 @@ Anyone with your master private key can access all your funds.`;
                 const spinner = document.getElementById('balanceVerificationSpinner');
                 if (spinner) spinner.style.display = 'inline';
 
-                if (serverProvidesVesting && utxosHaveVestingField) {
+                if (utxosHaveVestingField) {
                     // SERVER-SIDE VESTING: instant classification from Fulcrum data
-                    for (const utxo of utxos) {
-                        const isVested = utxo.vested === true;
-                        const classification = {
-                            isVested: isVested,
-                            coinbaseHeight: utxo.coinbase_height ?? null
-                        };
-                        // Populate in-memory cache
-                        const utxoKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
-                        txoClassificationCache.set(utxoKey, classification);
-                        if (isVested) {
-                            runningVestedBalance += BigInt(utxo.value);
-                        } else {
-                            runningUnvestedBalance += BigInt(utxo.value);
+                    try {
+                        for (const utxo of utxos) {
+                            const isVested = utxo.vested === true;
+                            const isUnconfirmed = !utxo.height || utxo.height <= 0;
+                            const classification = {
+                                isVested: isVested,
+                                coinbaseHeight: utxo.coinbase_height ?? null
+                            };
+                            // Populate in-memory cache
+                            const utxoKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
+                            txoClassificationCache.set(utxoKey, classification);
+                            const val = BigInt(utxo.value ?? 0);
+                            if (isVested) {
+                                runningVestedBalance += val;
+                                if (isUnconfirmed) unconfirmedVestedBalance += val;
+                            } else {
+                                runningUnvestedBalance += val;
+                                if (isUnconfirmed) unconfirmedUnvestedBalance += val;
+                            }
                         }
+                    } catch (e) {
+                        console.error('[ServerVesting] Error classifying UTXOs:', e);
                     }
                     // Persist batch to IndexedDB
                     const entries = utxos.map(u => ({
@@ -3717,25 +3731,21 @@ Anyone with your master private key can access all your funds.`;
                     return;
                 }
 
-                // Server provides vesting but these UTXOs are stale (from cache/previous session)
-                // Skip classification — fresh listunspent response will have the vesting fields
-                if (serverProvidesVesting && !utxosHaveVestingField) {
-                    console.log(`[ServerVesting] Skipping classification: UTXOs lack vesting fields (stale data), waiting for fresh server response`);
-                    if (spinner) spinner.style.display = 'none';
-                    return;
-                }
-
-                // LEGACY: fall back to queue-based client-side tracing
+                // UTXOs lack vesting fields — fall through to legacy client-side tracing
+                // (even if serverProvidesVesting is true, stale/cached UTXOs still need classification)
                 for (const utxo of utxos) {
                     const utxoKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
+                    const isUnconfirmed = !utxo.height || utxo.height <= 0;
 
                     if (txoClassificationCache.has(utxoKey)) {
                         // CACHE HIT - Already classified, use immediately
                         const cached = txoClassificationCache.get(utxoKey);
                         if (cached.isVested) {
                             runningVestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedVestedBalance += BigInt(utxo.value);
                         } else {
                             runningUnvestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedUnvestedBalance += BigInt(utxo.value);
                         }
                     } else {
                         // CACHE MISS - Add to queue for async classification
@@ -3798,13 +3808,17 @@ Anyone with your master private key can access all your funds.`;
                         progressTextEl.textContent = `${processed}/${totalToProcess} (${remaining} remaining)`;
                     }
 
+                    const isUnconfirmed = !utxo.height || utxo.height <= 0;
+
                     // Skip if somehow already cached (could happen during processing)
                     if (txoClassificationCache.has(utxo.key)) {
                         const cached = txoClassificationCache.get(utxo.key);
                         if (cached.isVested) {
                             runningVestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedVestedBalance += BigInt(utxo.value);
                         } else {
                             runningUnvestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedUnvestedBalance += BigInt(utxo.value);
                         }
                         updateVestingBalanceDisplayRealtime();
                         continue;
@@ -3828,8 +3842,10 @@ Anyone with your master private key can access all your funds.`;
                         // Update running balance
                         if (classification.isVested) {
                             runningVestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedVestedBalance += BigInt(utxo.value);
                         } else {
                             runningUnvestedBalance += BigInt(utxo.value);
+                            if (isUnconfirmed) unconfirmedUnvestedBalance += BigInt(utxo.value);
                         }
 
                         // REAL-TIME UI UPDATE - watch the numbers grow!
@@ -3841,6 +3857,7 @@ Anyone with your master private key can access all your funds.`;
                         const errorClassification = { isVested: false, coinbaseHeight: null };
                         txoClassificationCache.set(utxo.key, errorClassification);
                         runningUnvestedBalance += BigInt(utxo.value);
+                        if (isUnconfirmed) unconfirmedUnvestedBalance += BigInt(utxo.value);
                         updateVestingBalanceDisplayRealtime();
                     }
 
@@ -3957,6 +3974,8 @@ Anyone with your master private key can access all your funds.`;
                 const vestedEl = document.getElementById('vestedBalance');
                 const unvestedEl = document.getElementById('unvestedBalance');
                 const totalEl = document.getElementById('walletBalance');
+                const vestedUnconfEl = document.getElementById('vestedUnconfirmed');
+                const unvestedUnconfEl = document.getElementById('unvestedUnconfirmed');
 
                 if (vestedEl) {
                     vestedEl.textContent = SatoshiMath.satoshisToAlpha(runningVestedBalance) + ' ALPHA';
@@ -3969,6 +3988,26 @@ Anyone with your master private key can access all your funds.`;
                     // Fall back to calculated sum if Fulcrum balance not yet fetched
                     const displayTotal = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (runningVestedBalance + runningUnvestedBalance);
                     totalEl.textContent = SatoshiMath.satoshisToAlpha(displayTotal) + ' ALPHA';
+                }
+
+                // Show unconfirmed vesting portions (matching total unconfirmed display style)
+                if (vestedUnconfEl) {
+                    if (unconfirmedVestedBalance > 0n) {
+                        vestedUnconfEl.style.display = 'inline';
+                        vestedUnconfEl.textContent = `(${SatoshiMath.satoshisToAlpha(unconfirmedVestedBalance)})`;
+                    } else {
+                        vestedUnconfEl.style.display = 'none';
+                        vestedUnconfEl.textContent = '';
+                    }
+                }
+                if (unvestedUnconfEl) {
+                    if (unconfirmedUnvestedBalance > 0n) {
+                        unvestedUnconfEl.style.display = 'inline';
+                        unvestedUnconfEl.textContent = `(${SatoshiMath.satoshisToAlpha(unconfirmedUnvestedBalance)})`;
+                    } else {
+                        unvestedUnconfEl.style.display = 'none';
+                        unvestedUnconfEl.textContent = '';
+                    }
                 }
 
                 // Check balance verification after updating display
@@ -4032,6 +4071,8 @@ Anyone with your master private key can access all your funds.`;
                 isProcessingUtxoQueue = false;  // Stop any ongoing processing
                 runningVestedBalance = 0n;
                 runningUnvestedBalance = 0n;
+                unconfirmedVestedBalance = 0n;
+                unconfirmedUnvestedBalance = 0n;
                 // Note: Do NOT clear txoClassificationCache - it's permanent!
                 console.log('[TxoQueue] Queue cleared');
             }
@@ -4086,18 +4127,19 @@ Anyone with your master private key can access all your funds.`;
                         console.error('[BalanceVerify] Error fetching Fulcrum balance:', error);
                         return;
                     }
-                    if (result && result.confirmed !== undefined) {
-                        fulcrumDirectBalance = BigInt(result.confirmed);
+                    if (result && result.confirmed != null) {
+                        // Include unconfirmed so total matches listunspent (which includes mempool UTXOs)
+                        try {
+                            fulcrumDirectBalance = BigInt(result.confirmed) + BigInt(result.unconfirmed || 0);
+                        } catch (e) {
+                            console.error('[BalanceVerify] Invalid balance value from server:', result, e);
+                            return;
+                        }
                         console.log(`[BalanceVerify] Fulcrum direct balance: ${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA`);
 
-                        // Detect and use server-side vesting data from get_balance
-                        if (result.confirmed_vested !== undefined) {
-                            serverProvidesVesting = true;
-                            runningVestedBalance = BigInt(result.confirmed_vested);
-                            runningUnvestedBalance = BigInt(result.confirmed_unvested || 0);
-                            console.log(`[ServerVesting] Balance from server: vested=${SatoshiMath.satoshisToAlpha(runningVestedBalance)}, unvested=${SatoshiMath.satoshisToAlpha(runningUnvestedBalance)}`);
-                            updateVestingBalanceDisplayRealtime();
-                        }
+                        // Note: serverProvidesVesting is set exclusively from UTXO data in
+                        // processIncomingUtxos to avoid race conditions where get_balance
+                        // arrives before listunspent with vesting fields.
 
                         checkBalanceVerification();
                     }
@@ -4147,10 +4189,17 @@ Anyone with your master private key can access all your funds.`;
                         // Reset running balances
                         runningVestedBalance = 0n;
                         runningUnvestedBalance = 0n;
+                        unconfirmedVestedBalance = 0n;
+                        unconfirmedUnvestedBalance = 0n;
 
                         // Re-fetch both balance and UTXOs
                         fetchFulcrumDirectBalance(currentAddress);
-                        refreshBalance(); // This should re-fetch UTXOs
+                        // Use the correct refresh function for the current mode
+                        if (watchOnlyMode && watchOnlyAddressValue) {
+                            refreshWatchOnlyBalance(watchOnlyAddressValue);
+                        } else {
+                            refreshBalance();
+                        }
                     }
                 }, BALANCE_RETRY_INTERVAL);
             }
@@ -8052,6 +8101,8 @@ Anyone with your master private key can access all your funds.`;
                         electrumSocket = null;
                         electrumConnected = false;
                         serverProvidesVesting = false;
+                        fulcrumDirectBalance = 0n;
+                        balanceRetryCount = 0;
                         currentScriptHashSubscription = null;
                         headerSubscriptionActive = false;
                         isInitialLoad = true;  // Reset for next connection
@@ -8176,6 +8227,8 @@ Anyone with your master private key can access all your funds.`;
 
                 electrumConnected = false;
                 serverProvidesVesting = false;
+                fulcrumDirectBalance = 0n;
+                balanceRetryCount = 0;
                 electrumCallbacks = {};
                 updateUtxoListDisplay(); // Update UTXO list display when disconnected
 
@@ -8661,11 +8714,14 @@ Anyone with your master private key can access all your funds.`;
                 // Fetch UTXOs
                 electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                     if (result !== null && result !== undefined) {
-                        // Always update currentUtxos from server (picks up new fields like vested)
-                        currentUtxos = result.map(utxo => ({
+                        const newUtxos = result.map(utxo => ({
                             ...utxo,
                             address: address
                         }));
+
+                        // Only reprocess if UTXOs actually changed (prevents flicker and redundant work)
+                        const utxosChanged = hasUtxoArrayChanged(currentUtxos, newUtxos);
+                        currentUtxos = newUtxos;
 
                         // Calculate balances using BigInt for precision
                         let confirmed = 0n;
@@ -8691,8 +8747,10 @@ Anyone with your master private key can access all your funds.`;
                         updateUtxoListDisplay();
                         updateCommonBalance(); // This will update Send button state
 
-                        // Process UTXOs through server-aware classification
-                        processIncomingUtxos(currentUtxos, address);
+                        // Only reprocess classification when UTXOs changed
+                        if (utxosChanged) {
+                            processIncomingUtxos(currentUtxos, address);
+                        }
                     }
                 });
 
@@ -9216,7 +9274,9 @@ Anyone with your master private key can access all your funds.`;
 
             // Format transaction for display
             function formatTransactionDisplay(tx, ourAddress, confirmations, txDetails) {
-                const txid = tx.tx_hash || tx.txid || tx.id;
+                const rawTxid = tx.tx_hash || tx.txid || tx.id || '';
+                // Sanitize txid: must be hex only (prevents innerHTML injection)
+                const txid = rawTxid.replace(/[^a-fA-F0-9]/g, '');
                 const truncatedTxid = txid.substring(0, 6) + '...' + txid.substring(txid.length - 6);
                 const txLink = `https://www.unicity.network/tx/${txid}`;
                 
@@ -9283,6 +9343,9 @@ Anyone with your master private key can access all your funds.`;
                     }
                 }
                 
+                // Sanitize address for safe innerHTML use (alphanumeric + bech32 chars only)
+                const sanitizeAddr = (a) => (a || '').replace(/[^a-zA-Z0-9]/g, '');
+
                 let addressHtml = '';
                 if (isLoading) {
                     // Show loading state for address
@@ -9293,22 +9356,24 @@ Anyone with your master private key can access all your funds.`;
                     if (fromAddresses.length > 0) {
                         // Remove duplicates
                         fromAddresses = [...new Set(fromAddresses)];
-                        
+
                         addressHtml += '<div style="margin-top: 5px; font-size: 12px; color: #666;">From: ';
                         fromAddresses.forEach((addr, idx) => {
                             if (idx > 0) addressHtml += ', ';
-                            const truncAddr = addr.substring(0, 11) + '...' + addr.substring(addr.length - 6);
-                            addressHtml += `<a href="https://www.unicity.network/address/${addr}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a>`;
+                            const safeAddr = sanitizeAddr(addr);
+                            const truncAddr = safeAddr.substring(0, 11) + '...' + safeAddr.substring(safeAddr.length - 6);
+                            addressHtml += `<a href="https://www.unicity.network/address/${safeAddr}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a>`;
                         });
                         addressHtml += '</div>';
                     }
-                    
+
                     // For incoming transactions, show sender
                     if (isIncoming && senderAddress && fromAddresses.length === 0) {
-                        const truncAddr = senderAddress.substring(0, 11) + '...' + senderAddress.substring(senderAddress.length - 6);
-                        addressHtml += `<div style="margin-top: 5px; font-size: 12px; color: #666;">From: <a href="https://www.unicity.network/address/${senderAddress}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a></div>`;
+                        const safeSender = sanitizeAddr(senderAddress);
+                        const truncAddr = safeSender.substring(0, 11) + '...' + safeSender.substring(safeSender.length - 6);
+                        addressHtml += `<div style="margin-top: 5px; font-size: 12px; color: #666;">From: <a href="https://www.unicity.network/address/${safeSender}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a></div>`;
                     }
-                    
+
                     // Show destinations
                     if (destinations.length > 0) {
                         // If no wallet is loaded (ourAddress is null), show all destinations
@@ -9317,8 +9382,9 @@ Anyone with your master private key can access all your funds.`;
                             addressHtml += '<div style="margin-top: 5px; font-size: 12px; color: #666;">To: ';
                             destinations.forEach((dest, idx) => {
                                 if (idx > 0) addressHtml += ', ';
-                                const truncAddr = dest.address.substring(0, 11) + '...' + dest.address.substring(dest.address.length - 6);
-                                addressHtml += `<a href="https://www.unicity.network/address/${dest.address}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a>`;
+                                const safeDest = sanitizeAddr(dest.address);
+                                const truncAddr = safeDest.substring(0, 11) + '...' + safeDest.substring(safeDest.length - 6);
+                                addressHtml += `<a href="https://www.unicity.network/address/${safeDest}" target="_blank" style="color: #3b82f6; text-decoration: none;">${truncAddr}</a>`;
                             });
                             addressHtml += '</div>';
                         }
@@ -9347,6 +9413,9 @@ Anyone with your master private key can access all your funds.`;
                 const vestingBadgeHtml = vestingLabel ?
                     `<span style="font-size: 10px; padding: 1px 6px; border-radius: 3px; background-color: ${borderColor}20; color: ${borderColor}; font-weight: 600; margin-left: 8px;">${vestingLabel}</span>` : '';
 
+                // Sanitize height to integer for safe innerHTML use
+                const safeHeight = parseInt(tx.height, 10) || 0;
+
                 txDiv.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: start;">
                         <div style="flex: 1;">
@@ -9361,8 +9430,8 @@ Anyone with your master private key can access all your funds.`;
                             </div>
                             <div style="color: #666; font-size: 12px;">
                                 <span style="color: ${statusColor};">${statusText}</span>
-                                ${tx.height > 0 ? ` • Block ${tx.height}` : ''}
-                                <span class="block-timestamp" data-height="${tx.height}"></span>
+                                ${safeHeight > 0 ? ` &bull; Block ${safeHeight}` : ''}
+                                <span class="block-timestamp" data-height="${safeHeight}"></span>
                             </div>
                             ${addressHtml}
                         </div>
@@ -10350,9 +10419,10 @@ Anyone with your master private key can access all your funds.`;
                     const utxoDiv = document.createElement('div');
 
                     const amount = SatoshiMath.satoshisToAlpha(utxo.value);
-                    const txid = utxo.tx_hash || utxo.txid;
-                    const vout = utxo.tx_pos !== undefined ? utxo.tx_pos : utxo.vout;
-                    const height = utxo.height || 0;
+                    const rawUtxoTxid = utxo.tx_hash || utxo.txid || '';
+                    const txid = rawUtxoTxid.replace(/[^a-fA-F0-9]/g, '');
+                    const vout = parseInt(utxo.tx_pos !== undefined ? utxo.tx_pos : utxo.vout, 10) || 0;
+                    const height = parseInt(utxo.height, 10) || 0;
                     const source = utxo.source === 'offline' ? ' (imported)' : '';
                     
                     // Check if this UTXO is consumed
@@ -11059,18 +11129,32 @@ Anyone with your master private key can access all your funds.`;
                         break;
                 }
                 
-                notification.innerHTML = `
-                    <div class="notification-icon">${icon}</div>
-                    <div class="notification-content">
-                        <div class="notification-title">${title}</div>
-                        <div class="notification-message">${message}</div>
-                    </div>
-                    <button class="notification-close">&times;</button>
-                `;
-                
-                // Add close functionality
-                const closeBtn = notification.querySelector('.notification-close');
+                // Build notification DOM safely (no innerHTML with user/server data)
+                const iconDiv = document.createElement('div');
+                iconDiv.className = 'notification-icon';
+                iconDiv.textContent = icon;
+
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'notification-title';
+                titleDiv.textContent = title;
+
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'notification-message';
+                msgDiv.textContent = message;
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'notification-content';
+                contentDiv.appendChild(titleDiv);
+                contentDiv.appendChild(msgDiv);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'notification-close';
+                closeBtn.innerHTML = '&times;';
                 closeBtn.onclick = () => removeNotification(notification);
+
+                notification.appendChild(iconDiv);
+                notification.appendChild(contentDiv);
+                notification.appendChild(closeBtn);
                 
                 // Add to container
                 container.appendChild(notification);
@@ -11191,6 +11275,23 @@ Anyone with your master private key can access all your funds.`;
             function hasArrayChanged(oldArray, newArray) {
                 return analyzeTransactionChanges(oldArray, newArray).hasChanged;
             }
+
+            // Compare UTXO arrays including vesting fields to avoid redundant reprocessing
+            function hasUtxoArrayChanged(oldUtxos, newUtxos) {
+                if (!oldUtxos || !newUtxos) return true;
+                if (oldUtxos.length !== newUtxos.length) return true;
+                const oldKeys = new Map();
+                for (const u of oldUtxos) {
+                    oldKeys.set(`${u.tx_hash}:${u.tx_pos}`, { value: u.value, height: u.height, vested: u.vested });
+                }
+                for (const u of newUtxos) {
+                    const key = `${u.tx_hash}:${u.tx_pos}`;
+                    const old = oldKeys.get(key);
+                    if (!old) return true;
+                    if (old.value !== u.value || old.height !== u.height || old.vested !== u.vested) return true;
+                }
+                return false;
+            }
             
             // Update refreshBalance to store current data
             const originalRefreshBalance = refreshBalance;
@@ -11285,16 +11386,21 @@ Anyone with your master private key can access all your funds.`;
                         electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                             if (result) {
                                 const currentAddress = wallet.addresses[0].address;
-                                // Always update currentUtxos from server (picks up new fields like vested)
-                                currentUtxos = result.map(utxo => ({
+                                const newUtxos = result.map(utxo => ({
                                     ...utxo,
                                     address: currentAddress
                                 }));
+
+                                // Only reprocess if UTXOs actually changed
+                                const utxosChanged = hasUtxoArrayChanged(currentUtxos, newUtxos);
+                                currentUtxos = newUtxos;
                                 updateCommonBalance();
                                 updateUtxoListDisplay();
 
-                                // Process UTXOs through server-aware classification
-                                processIncomingUtxos(currentUtxos, currentAddress);
+                                // Only reprocess classification when UTXOs changed
+                                if (utxosChanged) {
+                                    processIncomingUtxos(currentUtxos, currentAddress);
+                                }
                             }
                         });
                     }
