@@ -30,3 +30,4 @@ debug-service/DEBUG_ANALYSIS.md
 
 # Test scripts (can be regenerated)
 test_bigint_precision.js
+.claude
