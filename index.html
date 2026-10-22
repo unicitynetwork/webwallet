@@ -4719,6 +4719,8 @@ Anyone with your master private key can access all your funds.`;
                 restoreFileInput.value = '';
                 restorePasswordInput.value = '';
                 if (restoreMnemonicInput) restoreMnemonicInput.value = '';
+                // A Rescan with no file belongs to the import that was just done, not to a later one.
+                if (extractedWalletData) extractedWalletData.fromSphereImport = false;
                 restoreStatus.style.display = 'none';
                 walletScanOptions.style.display = 'none';
                 walletScanResults.style.display = 'none';
@@ -5758,6 +5760,13 @@ Anyone with your master private key can access all your funds.`;
             // Start wallet scanning or decrypt
             async function startWalletScan() {
                 const file = restoreFileInput.files[0];
+                // A phrase or Sphere JSON import already holds its keys in extractedWalletData;
+                // rescanning re-reads no file (a .json would otherwise hit the text-backup parser).
+                if ((!file || file.name.toLowerCase().endsWith('.json')) &&
+                    extractedWalletData && extractedWalletData.fromSphereImport && extractedWalletData.masterKey) {
+                    await performWalletScan();
+                    return;
+                }
                 if (!file) {
                     alert('Please select a file first');
                     return;
@@ -7377,7 +7386,8 @@ Anyone with your master private key can access all your funds.`;
                             masterKey: wallet.masterPrivateKey,
                             masterChainCode: wallet.masterChainCode,
                             descriptorPath: wallet.descriptorPath,
-                            isAlphaWallet: true
+                            isAlphaWallet: true,
+                            fromSphereImport: true
                         };
 
                         restoreStatus.className = 'info-box success';
@@ -8039,6 +8049,8 @@ Anyone with your master private key can access all your funds.`;
             
             // File input change handler
             restoreFileInput.addEventListener('change', async function() {
+                // A newly chosen file replaces whatever a phrase/JSON import left for Rescan.
+                if (extractedWalletData) extractedWalletData.fromSphereImport = false;
                 if (this.files.length > 0) {
                     const file = this.files[0];
 
