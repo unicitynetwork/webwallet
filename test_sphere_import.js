@@ -681,6 +681,33 @@ console.log('\n=== Text backup restores the address it was saved on, not index 0
     w.backupPathLines({ masterChainCode: null, addresses: [{ path: "m/44'/0'/0'" }] }), '');
 }
 
+console.log('\n=== Save-time check: the backup restores the same address AND signing key ===');
+{
+  const w = loadFromIndex(
+    [...DERIVATION_FNS, ...BIP39_FNS, 'descriptorPathLine', 'checkBackupRestoresWallet'],
+    ['CHARSET', 'BIP39_WORDLIST', 'SPHERE_DESCRIPTOR_PATH']
+  );
+  const MASTER = 'e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35';
+  const CHAIN = '873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508';
+  const wallet = w.buildHdWallet({ masterPrivateKey: MASTER, masterChainCode: CHAIN, descriptorPath: "44'/0'/0'", index: 3 });
+  const text = 'MASTER CHAIN CODE (for BIP32 HD wallet compatibility):\r\n' + CHAIN + '\r\n\r\n' +
+    'WALLET TYPE: BIP32 hierarchical deterministic wallet' + w.backupPathLines(wallet) +
+    '\n\nYOUR ADDRESSES:\nAddress 1: ' + wallet.addresses[0].address;
+  check('a correct backup passes', w.checkBackupRestoresWallet(text, MASTER, wallet), null);
+  check('a backup missing its path lines still passes (found by search)',
+    w.checkBackupRestoresWallet(text.replace(/\n\nDESCRIPTOR PATH:[^\n]*\nADDRESS PATH:[^\n]*/, ''), MASTER, wallet), null);
+  const other = w.buildHdWallet({ masterPrivateKey: MASTER, masterChainCode: CHAIN, descriptorPath: "44'/0'/0'", index: 4 });
+  check('a backup that would restore another address is caught',
+    /instead of/.test(w.checkBackupRestoresWallet(text, MASTER, other) || ''), true);
+  check('a wrong signing key is caught',
+    /different signing key/.test(
+      w.checkBackupRestoresWallet(text, MASTER, { ...wallet, childPrivateKey: other.childPrivateKey }) || ''), true);
+  check('a wrong chain code in the file is caught',
+    /chain code/.test(w.checkBackupRestoresWallet(text.replace(CHAIN, CHAIN.replace(/^8/, '9')), MASTER, wallet) || ''), true);
+  check('standard (HMAC) wallets are left to the existing checks',
+    w.checkBackupRestoresWallet('anything', MASTER, { masterChainCode: null, isImportedAlphaWallet: false }), null);
+}
+
 console.log('\n=== Sphere export: v2 authenticated encryption + anchors ===');
 {
   const w = loadFromIndex([...DERIVATION_FNS, ...BIP39_FNS, 'parseSphereWalletJSON', 'buildSphereImportedWallet'], [

@@ -1427,6 +1427,14 @@ Anyone with your master private key can access all your funds.`;
                         showCriticalError('Master key mismatch after decryption');
                         return;
                     }
+                    // The file must restore this exact address and signing key.
+                    const restoreProblem = window.checkBackupRestoresWallet
+                        ? window.checkBackupRestoresWallet(savedContent, decryptedMasterKey, originalWallet)
+                        : null;
+                    if (restoreProblem) {
+                        showCriticalError('Saved backup would not restore this wallet: ' + restoreProblem);
+                        return;
+                    }
                     
                     // Also verify addresses from the file content
                     const addressMatches = savedContent.match(/Address \d+: (alpha1[a-z0-9]{38,})/g);
@@ -1504,6 +1512,14 @@ Anyone with your master private key can access all your funds.`;
                         showCriticalError('Master key mismatch detected in saved content');
                         return;
                     }
+                }
+                // The file must restore this exact address and signing key.
+                const restoreProblem = window.checkBackupRestoresWallet
+                    ? window.checkBackupRestoresWallet(savedContent, originalWallet.masterPrivateKey, originalWallet)
+                    : null;
+                if (restoreProblem) {
+                    showCriticalError('Saved backup would not restore this wallet: ' + restoreProblem);
+                    return;
                 }
                 
                 window.showInAppNotification('✅ Wallet Verified', 
@@ -2761,6 +2777,41 @@ Anyone with your master private key can access all your funds.`;
             function buildSphereImportedWallet(parsed) {
                 return buildHdWallet(parsed);
             }
+
+            /**
+             * Save-time check for BIP32 backups: running this backup text through the restore
+             * logic must give back the wallet's active address AND its signing key, not just
+             * the same address list. Returns null when it does, otherwise what is wrong.
+             */
+            function checkBackupRestoresWallet(text, masterKey, wallet) {
+                if (!wallet || !wallet.isImportedAlphaWallet || !wallet.masterChainCode) return null;
+                try {
+                    const chainCodeMatch = String(text).match(/MASTER CHAIN CODE \([^)]*\):[ \t]*\r?\n?[ \t]*([0-9a-fA-F]{64})/);
+                    if (!chainCodeMatch || chainCodeMatch[1].toLowerCase() !== wallet.masterChainCode.toLowerCase()) {
+                        return 'the chain code in the file differs from the wallet';
+                    }
+                    const sel = resolveHdSelectionFromBackup(text, masterKey, wallet.masterChainCode);
+                    if (!sel || sel.unverified) return 'the file does not identify its active address';
+                    const restored = buildHdWallet({
+                        masterPrivateKey: masterKey,
+                        masterChainCode: wallet.masterChainCode,
+                        descriptorPath: sel.descriptorPath,
+                        chain: sel.chain,
+                        index: sel.index
+                    });
+                    if (restored.addresses[0].address !== wallet.addresses[0].address) {
+                        return 'it would restore ' + restored.addresses[0].address + ' instead of ' + wallet.addresses[0].address;
+                    }
+                    if (wallet.childPrivateKey && restored.childPrivateKey !== wallet.childPrivateKey) {
+                        return 'it would restore a different signing key for the same address';
+                    }
+                    return null;
+                } catch (e) {
+                    return e.message;
+                }
+            }
+            // Called from the top-level save verification - see window.descriptorPathLine.
+            window.checkBackupRestoresWallet = checkBackupRestoresWallet;
 
             // Generate a new address from master key
             function generateNewAddress() {
