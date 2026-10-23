@@ -7272,7 +7272,7 @@ Anyone with your master private key can access all your funds.`;
                             <div style="font-weight: bold; margin-bottom: 5px;">
                                 ${walletInfo.isChange ? 'Change ' : ''}Address #${walletInfo.index}
                                 ${walletInfo.isChange ? '<span style="background: #ffa500; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;">CHANGE</span>' : ''}
-                                ${walletInfo.fromBackup ? '<span style="background: #06d6a0; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;">SAVED IN BACKUP</span>' : ''}
+                                ${walletInfo.fromBackup ? '<span style="background: #06d6a0; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;" title="The address that was active when this backup was saved. Every address of this wallet is recoverable from the backup.">ACTIVE WHEN SAVED</span>' : ''}
                             </div>
                             <div style="font-family: monospace; font-size: 12px; color: #666; word-break: break-all;">${walletInfo.address}</div>
                             <div style="font-size: 11px; color: #999; margin-top: 3px;">Path: ${walletInfo.path}</div>
