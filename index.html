@@ -1650,7 +1650,16 @@ Anyone with your master private key can access all your funds.`;
         }
         
         // Show critical error dialog
-        function showCriticalError(details) {
+        function showCriticalError(details, kind) {
+            // kind 'key': the wallet's signing key and address disagree (load/persist/sign checks).
+            const isKeyCheck = kind === 'key';
+            const heading = isKeyCheck ? 'WALLET KEY CHECK FAILED' : 'WALLET SAVE VERIFICATION FAILED';
+            const summary = isKeyCheck
+                ? "This wallet's signing key does not match its address."
+                : 'The saved wallet file could not be verified. This is an internal application error.';
+            const warning = isKeyCheck
+                ? 'Do not send funds to this wallet\'s address.<br>Restore the wallet from your recovery phrase or backup file.'
+                : 'Do not rely on this backup file!<br>Please report this issue immediately to the developer (cryptohog) <br>on the Discord helpdesk channel.';
             const errorModal = document.createElement('div');
             errorModal.style.cssText = `
                 position: fixed;
@@ -1668,18 +1677,16 @@ Anyone with your master private key can access all your funds.`;
             errorModal.innerHTML = `
                 <div style="background: white; padding: 30px; border-radius: 10px; max-width: 600px; text-align: center;">
                     <div style="font-size: 48px; color: #ff0000; margin-bottom: 20px;">⚠️ CRITICAL ERROR</div>
-                    <h2 style="color: #ff0000; margin-bottom: 20px;">WALLET SAVE VERIFICATION FAILED</h2>
+                    <h2 style="color: #ff0000; margin-bottom: 20px;">${heading}</h2>
                     <p style="font-size: 18px; margin-bottom: 20px; color: #333;">
-                        The saved wallet file could not be verified. This is an internal application error.
+                        ${summary}
                     </p>
                     <p style="font-size: 16px; margin-bottom: 20px; color: #666;">
                         <strong>Error details:</strong> ${details}
                     </p>
                     <div style="background: #ffe0e0; padding: 20px; border-radius: 5px; margin-bottom: 20px;">
                         <p style="font-size: 16px; color: #cc0000; margin: 0;">
-                            <strong>IMPORTANT:</strong> Do not rely on this backup file!<br>
-                            Please report this issue immediately to the developer (cryptohog) 
-                            on the Discord helpdesk channel.
+                            <strong>IMPORTANT:</strong> ${warning}
                         </p>
                     </div>
                     <button onclick="this.parentElement.parentElement.remove()" 
@@ -2074,6 +2081,35 @@ Anyone with your master private key can access all your funds.`;
                         }
                     }
                     
+                    // BIP32 wallet stored without its signing key: re-derive it at the stored path,
+                    // but only accept it if it reproduces the stored address exactly.
+                    if (!wallet.childPrivateKey && wallet.isImportedAlphaWallet && wallet.masterChainCode &&
+                        wallet.masterPrivateKey && wallet.addresses && wallet.addresses.length > 0) {
+                        const p = parseFullAddressPath(wallet.addresses[0].path);
+                        if (p) {
+                            const d = deriveAddressAtIndex(wallet.masterPrivateKey, wallet.masterChainCode, p.index, true,
+                                p.chain === 1, p.descriptorPath);
+                            if (d.address === wallet.addresses[0].address) {
+                                wallet.childPrivateKey = d.privateKey;
+                                saveWalletData();
+                            }
+                        }
+                    }
+
+                    // Every load goes through here: refuse to present a wallet whose signing key and
+                    // address disagree (signing re-checks and would abort, but say so up front).
+                    const loadIntegrityProblem = checkWalletKeyIntegrity(wallet);
+                    if (loadIntegrityProblem) {
+                        console.error('WALLET INTEGRITY ERROR on load:', loadIntegrityProblem);
+                        showCriticalError('This wallet failed its key check: ' + loadIntegrityProblem +
+                            '. Do not send funds to its address. Restore it from your recovery phrase or backup.', 'key');
+                        // Do not present the address: hide it, allow restore, keep Reset available.
+                        updateButtonStates(false);
+                        deleteWalletBtn.disabled = false;
+                        walletInfo.style.display = 'none';
+                        return;
+                    }
+
                     // Update UI if wallet exists
                     if (wallet.masterPrivateKey) {
                         // Update regular master key display
@@ -2126,6 +2162,9 @@ Anyone with your master private key can access all your funds.`;
                                         lastScannedWalletData.masterKey = wallet.masterPrivateKey;
                                         lastScannedWalletData.masterChainCode = wallet.masterChainCode;
                                         lastScannedWalletData.isAlphaWallet = wallet.isImportedAlphaWallet;
+                                        // The branch the wallet is actually on, so switching stays on it.
+                                        lastScannedWalletData.descriptorPath = wallet.descriptorPath ||
+                                            (parseFullAddressPath(wallet.addresses[0].path) || {}).descriptorPath || null;
                                         
                                         // Save updated data with master keys
                                         const fingerprint = generateWalletFingerprint(
@@ -2551,13 +2590,14 @@ Anyone with your master private key can access all your funds.`;
                             throw new Error('The key in this backup does not derive the address it records - refusing to import');
                         }
                     }
-                    return explicitAddress;
+                    // verified: the derived address was checked against the one the file records.
+                    return Object.assign({}, explicitAddress, { verified: !!recorded });
                 }
 
                 if (recorded) {
                     const branches = explicitBranch ? [explicitBranch] : LEGACY_DESCRIPTOR_PATHS;
                     const found = findAddressInBranches(masterKey, masterChainCode, branches, recorded, 100);
-                    if (found) return found;
+                    if (found) return Object.assign({}, found, { verified: true });
                     // The file names an address this key does not reach on any branch we know.
                     // Callers must not present index 0 as "the backup's address".
                     return {
@@ -2773,6 +2813,54 @@ Anyone with your master private key can access all your funds.`;
                 };
             }
 
+            /**
+             * THE key/address invariant. Transactions are signed with wallet.childPrivateKey for
+             * wallet.addresses[0]; if those ever disagree, funds sent to the shown address can be
+             * lost. Returns null when the wallet is consistent, otherwise what is wrong:
+             *  - the signing key must produce the stored public key and address, and
+             *  - the signing key must be the one the master key derives at that address's path.
+             * A wallet with no signing key yet (no address) has nothing to check.
+             */
+            function checkWalletKeyIntegrity(w) {
+                if (!w || !w.addresses || w.addresses.length === 0) return null;
+                const first = w.addresses[0];
+                if (!w.childPrivateKey) {
+                    // Signing would have no key for this address.
+                    return w.masterPrivateKey ? 'there is no signing key for address ' + first.address : null;
+                }
+                // Compare keys as canonical 64-digit lowercase hex.
+                const child = String(w.childPrivateKey).toLowerCase().padStart(64, '0');
+                try {
+                    const ec = new elliptic.ec('secp256k1');
+                    const publicKey = ec.keyFromPrivate(child, 'hex').getPublic(true, 'hex');
+                    if (addressFromPrivateKey(child) !== first.address) {
+                        return 'the signing key does not belong to address ' + first.address;
+                    }
+                    if (first.publicKey && first.publicKey !== publicKey) {
+                        return 'the stored public key does not belong to the signing key';
+                    }
+                    if (!w.masterPrivateKey) return null;
+                    let derived = null;
+                    if (w.isImportedAlphaWallet && w.masterChainCode) {
+                        const p = parseFullAddressPath(first.path);
+                        if (p) {
+                            derived = deriveAddressAtIndex(w.masterPrivateKey, w.masterChainCode, p.index, true,
+                                p.chain === 1, p.descriptorPath);
+                        }
+                    } else {
+                        const m = String(first.path || '').match(/^m\/44'\/0'\/(\d{1,10})'$/);
+                        if (m) derived = deriveAddressAtIndex(w.masterPrivateKey, null, parseInt(m[1], 10), false, false, null);
+                    }
+                    if (derived && (derived.privateKey !== child || derived.address !== first.address)) {
+                        return 'the master key does not derive this signing key at ' + first.path;
+                    }
+                    return null;
+                } catch (e) {
+                    return 'the wallet keys could not be checked: ' + e.message;
+                }
+            }
+            window.checkWalletKeyIntegrity = checkWalletKeyIntegrity;
+
             /** Turn a parsed Sphere phrase or export into this app's wallet object. */
             function buildSphereImportedWallet(parsed) {
                 return buildHdWallet(parsed);
@@ -2893,8 +2981,8 @@ Anyone with your master private key can access all your funds.`;
                 // Add to UI
                 addAddressToUI(wallet.addresses[wallet.addresses.length - 1]);
                 
-                // Save wallet to local storage
-                saveWalletData();
+                // Save wallet to local storage (refused - with an error dialog - if the key check fails)
+                if (saveWalletData() === false) return;
                 
                 // Show notification
                 if (isFirstAddress) {
@@ -2919,6 +3007,13 @@ Anyone with your master private key can access all your funds.`;
                 // Validate addressInfo
                 if (!addressInfo || !addressInfo.address) {
                     console.error('Invalid addressInfo provided to addAddressToUI:', addressInfo);
+                    return;
+                }
+
+                // Never display a receive address whose signing key does not match it.
+                if (checkWalletKeyIntegrity(wallet)) {
+                    console.error('Refusing to display address: wallet failed its key check');
+                    walletInfo.style.display = 'none';
                     return;
                 }
                 
@@ -5572,7 +5667,12 @@ Anyone with your master private key can access all your funds.`;
                     const cacheKey = `walletScanCache_${walletFingerprint}`;
                     const cacheData = {
                         timestamp: Date.now(),
-                        wallets: scanData.wallets,
+                        // No private keys in localStorage: selection re-derives them from the master key.
+                        wallets: (scanData.wallets || []).map(w => {
+                            const copy = Object.assign({}, w);
+                            delete copy.privateKey;
+                            return copy;
+                        }),
                         totalBalance: scanData.totalBalance,
                         scanCount: scanData.wallets.length,
                         // Branch the results were scanned on; the key above is the master key only.
@@ -6127,8 +6227,6 @@ Anyone with your master private key can access all your funds.`;
                         const addressSet = new Set();
                         
                         cachedResults.wallets.forEach(wallet => {
-                            // The "saved in backup" mark belongs to the file being loaded now.
-                            delete wallet.fromBackup;
                             if (!addressSet.has(wallet.address)) {
                                 addressSet.add(wallet.address);
                                 uniqueWallets.push(wallet);
@@ -6137,6 +6235,9 @@ Anyone with your master private key can access all your funds.`;
                             }
                         });
                         
+                        // Derivation order (older caches may hold a backup entry out of order).
+                        uniqueWallets.sort((a, b) =>
+                            ((a.isChange ? 1 : 0) - (b.isChange ? 1 : 0)) || (a.index - b.index));
                         scannedWallets = uniqueWallets;
                         
                         // Recalculate total balance from deduplicated wallets
@@ -6576,13 +6677,17 @@ Anyone with your master private key can access all your funds.`;
             }
 
             /**
-             * Put the address a backup was saved on at the top of the scan results, funded or not.
+             * Make sure the address a backup was saved on is in the scan results, funded or not.
              * The scan otherwise lists only index 0 and funded addresses, so restoring a backup
-             * saved on an unfunded index-3 address would show no trace of it.
+             * saved on an unfunded index-3 address would show no trace of it. It is inserted at
+             * its index position, so the list order is the same as for the same wallet recovered
+             * from its recovery phrase.
              */
             async function listBackupSelection() {
                 const sel = extractedWalletData && extractedWalletData.backupSelection;
                 if (!sel || !extractedWalletData.isAlphaWallet || !extractedWalletData.masterChainCode) return;
+                // Only an address proven against the one the file records is added.
+                if (!sel.unverified && !sel.verified) return;
                 if (sel.unverified) {
                     // Index 0 is NOT the backup's address here; say so instead of badging it.
                     if (sel.recordedAddress) {
@@ -6604,7 +6709,6 @@ Anyone with your master private key can access all your funds.`;
                 );
                 if (scannedWallets.some(w => w.address === walletInfo.address)) return;
                 walletInfo.isChange = sel.chain === 1;
-                walletInfo.fromBackup = true;
                 walletInfo.balance = -1;
                 if (scanOnlineCheckbox.checked && electrumConnected) {
                     try {
@@ -6615,8 +6719,18 @@ Anyone with your master private key can access all your funds.`;
                         // leave the balance unknown
                     }
                 }
-                scannedWallets.unshift(walletInfo);
-                foundWalletsList.insertBefore(renderWalletResult(walletInfo), foundWalletsList.firstChild);
+                insertWalletInOrder(walletInfo);
+            }
+
+            /** Insert a scan result in derivation order: receive chain first, then by index. */
+            function insertWalletInOrder(walletInfo) {
+                const rank = w => (w.isChange ? 1 : 0) * 0x100000000 + w.index;
+                let pos = scannedWallets.findIndex(w => rank(w) > rank(walletInfo));
+                if (pos === -1) pos = scannedWallets.length;
+                scannedWallets.splice(pos, 0, walletInfo);
+                // Result rows are rendered in scannedWallets order, one row per entry.
+                const rows = Array.from(foundWalletsList.children).filter(el => el.onclick);
+                foundWalletsList.insertBefore(renderWalletResult(walletInfo), rows[pos] || null);
             }
 
             async function performWalletScan(masterKey, masterChainCode, isAlphaWallet) {
@@ -6634,7 +6748,6 @@ Anyone with your master private key can access all your funds.`;
                 scannedWallets = [];
                 walletScanResults.style.display = 'block';
                 foundWalletsList.innerHTML = '';
-                await listBackupSelection();
                 scanStatus.textContent = 'Scanning...';
                 scanProgress.style.width = '0%';
                 
@@ -6827,6 +6940,9 @@ Anyone with your master private key can access all your funds.`;
                     }
                 }
                 
+                // After the scan, so it lands in index order among the scanned addresses.
+                await listBackupSelection();
+
                 scanningActive = false;
                 currentScanProgress = 100; // Set to 100% when complete
                 
@@ -6954,7 +7070,7 @@ Anyone with your master private key can access all your funds.`;
                             // We don't have the master keys here, but that's ok for display
                             masterKey: null,
                             masterChainCode: null,
-                            descriptorPath: null,
+                            descriptorPath: mostRecentCache.descriptorPath || null,
                             isAlphaWallet: true
                         };
                         
@@ -7213,22 +7329,12 @@ Anyone with your master private key can access all your funds.`;
                         }
 
                         document.body.removeChild(modal);
-                        // Reconstruct full wallet info from stored data
-                        const fullWalletInfo = deriveAddressAtIndex(
-                            lastScannedWalletData.masterKey,
-                            lastScannedWalletData.masterChainCode,
-                            walletInfo.index,
-                            lastScannedWalletData.isAlphaWallet,
-                            walletInfo.isChange,
-                            lastScannedWalletData.descriptorPath
-                        );
-                        fullWalletInfo.balance = walletInfo.balance;
-                        fullWalletInfo.utxoCount = walletInfo.utxoCount;
-
                         // Store the extracted wallet data globally before importing
                         extractedWalletData = lastScannedWalletData;
 
-                        selectWalletForImport(fullWalletInfo);
+                        // Pass the entry that was clicked: selectWalletForImport re-derives its key
+                        // and refuses if the master key does not derive this exact address.
+                        selectWalletForImport(Object.assign({}, walletInfo));
                     };
                     
                     content.appendChild(walletDiv);
@@ -7272,7 +7378,6 @@ Anyone with your master private key can access all your funds.`;
                             <div style="font-weight: bold; margin-bottom: 5px;">
                                 ${walletInfo.isChange ? 'Change ' : ''}Address #${walletInfo.index}
                                 ${walletInfo.isChange ? '<span style="background: #ffa500; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;">CHANGE</span>' : ''}
-                                ${walletInfo.fromBackup ? '<span style="background: #06d6a0; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;" title="The address that was active when this backup was saved. Every address of this wallet is recoverable from the backup.">ACTIVE WHEN SAVED</span>' : ''}
                             </div>
                             <div style="font-family: monospace; font-size: 12px; color: #666; word-break: break-all;">${walletInfo.address}</div>
                             <div style="font-size: 11px; color: #999; margin-top: 3px;">Path: ${walletInfo.path}</div>
@@ -7297,13 +7402,31 @@ Anyone with your master private key can access all your funds.`;
                 // Directly import without confirmation
                 // Don't stop scanning - let it continue in background
                 
+                // Never trust the listed entry's key (scan-cache entries come from localStorage):
+                // re-derive from the master key and require it to reproduce the listed address.
+                const derived = deriveAddressAtIndex(
+                    extractedWalletData.masterKey,
+                    extractedWalletData.masterChainCode,
+                    walletInfo.index,
+                    extractedWalletData.isAlphaWallet,
+                    !!walletInfo.isChange,
+                    extractedWalletData.descriptorPath
+                );
+                if (derived.address !== walletInfo.address) {
+                    console.error('WALLET INTEGRITY ERROR: listed address', walletInfo.address,
+                        'is not derived by this key at', derived.path, '(derives', derived.address + ')');
+                    showInAppNotification('Address Not Loaded',
+                        'This key does not derive ' + walletInfo.address + ' at ' + derived.path +
+                        '. Rescan and try again.', 'error');
+                    return;
+                }
+
                 // Create wallet with the selected index
-                // Remove utxos from walletInfo for storage
                 const addressInfo = {
-                    index: walletInfo.index,
-                    address: walletInfo.address,
-                    publicKey: walletInfo.publicKey,
-                    path: walletInfo.path,
+                    index: derived.index,
+                    address: derived.address,
+                    publicKey: derived.publicKey,
+                    path: derived.path,
                     createdAt: new Date().toISOString()
                 };
                 
@@ -7312,7 +7435,7 @@ Anyone with your master private key can access all your funds.`;
                     addresses: [addressInfo],
                     isEncrypted: false,
                     encryptedMasterKey: '',
-                    childPrivateKey: walletInfo.privateKey,
+                    childPrivateKey: derived.privateKey,
                     isImportedAlphaWallet: extractedWalletData.isAlphaWallet,
                     masterChainCode: extractedWalletData.masterChainCode,
                     // Keep the branch the scan walked, so later addresses stay on it.
@@ -7324,8 +7447,8 @@ Anyone with your master private key can access all your funds.`;
                 
                 // Update UI
                 updateButtonStates(true);
-                addAddressToUI(walletInfo);
-                saveWalletData();
+                addAddressToUI(wallet.addresses[0]);
+                if (saveWalletData() === false) return;
                 
                 // Close modal
                 closeRestoreModal();
@@ -7426,7 +7549,7 @@ Anyone with your master private key can access all your funds.`;
                         if (restoreMnemonicInput) restoreMnemonicInput.value = '';
 
                         updateButtonStates(true);
-                        saveWalletData();       // persists descriptorPath with the wallet
+                        if (saveWalletData() === false) return;   // persists descriptorPath with the wallet
                         updateUIFromWallet();   // renders wallet.addresses[0]
                         showInAppNotification('Wallet Imported', 'Loaded ' + wallet.addresses[0].path, 'success');
 
@@ -8258,6 +8381,13 @@ Anyone with your master private key can access all your funds.`;
             
             // Save wallet data using unique key per wallet
             function saveWalletData() {
+                // Never persist a wallet whose signing key and address disagree.
+                const integrityProblem = checkWalletKeyIntegrity(wallet);
+                if (integrityProblem) {
+                    console.error('WALLET INTEGRITY ERROR - not saved:', integrityProblem);
+                    showCriticalError('The wallet was NOT saved: ' + integrityProblem + '.', 'key');
+                    return false;
+                }
                 try {
                     // Get unique storage key for this wallet
                     const storageKey = getWalletStorageKey(wallet);
@@ -9294,6 +9424,10 @@ Anyone with your master private key can access all your funds.`;
                         updateTransactionHistory();
                         updateUtxoListDisplay();
                     }
+                } else if (hasWallet && checkWalletKeyIntegrity(wallet)) {
+                    // Failed key check: never present this address (see updateUIFromWallet).
+                    watchOnlySection.style.display = 'none';
+                    walletInfo.style.display = 'none';
                 } else if (hasWallet) {
                     watchOnlySection.style.display = 'none';
                     walletInfo.style.display = 'block';
@@ -12705,9 +12839,15 @@ Anyone with your master private key can access all your funds.`;
             function createAndSignTransaction(txPlan) {
                 
                 // Get the private key
-                const privateKeyHex = wallet.childPrivateKey || wallet.masterPrivateKey;
+                // Only the address's own key signs; never fall back to the master key.
+                const privateKeyHex = wallet.childPrivateKey;
                 if (!privateKeyHex) {
-                    throw new Error('No private key available');
+                    throw new Error('No signing key for this address - restore the wallet from its backup');
+                }
+                // Full key check (incl. re-derivation from the master key) before signing anything.
+                const integrityProblem = checkWalletKeyIntegrity(wallet);
+                if (integrityProblem) {
+                    throw new Error('Wallet integrity error: ' + integrityProblem + '. Transaction signing aborted.');
                 }
                 
                 
@@ -12720,6 +12860,9 @@ Anyone with your master private key can access all your funds.`;
                 
                 // Check if this pubkey hash matches the wallet address
                 const decoded = decodeBech32(wallet.addresses[0].address);
+                if (!decoded) {
+                    throw new Error('Wallet integrity error: the wallet address could not be decoded. Transaction signing aborted.');
+                }
                 if (decoded) {
                     const addressPubKeyHash = decoded.data.map(b => b.toString(16).padStart(2, '0')).join('');
                     if (pubKeyHash !== addressPubKeyHash) {

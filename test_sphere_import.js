@@ -200,6 +200,7 @@ const BIP39_FNS = [
   'normalizeDescriptorPath',
   'backupPathLines',
   'buildHdWallet',
+  'checkWalletKeyIntegrity',
 ];
 const VALID_12 =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -398,11 +399,16 @@ console.log('\n=== Address scan keeps the wallet on its own branch ===');
   // selectWalletForImport() builds the wallet object after the user picks a scanned
   // address. It touches DOM and module globals, so they get stubbed here.
   const src = [
+    extractConst(INDEX, 'CHARSET'),
+    ...DERIVATION_FNS.map((n) => extractFunction(INDEX, n)),
     extractFunction(INDEX, 'selectWalletForImport'),
-    'return { selectWalletForImport, getWallet: () => wallet };',
+    'return { selectWalletForImport, deriveAddressAtIndex, getWallet: () => wallet };',
   ].join('\n\n');
   // eslint-disable-next-line no-new-func
   const sandbox = new Function(
+    'CryptoJS',
+    'elliptic',
+    'console',
     'wallet',
     'extractedWalletData',
     'window',
@@ -417,6 +423,9 @@ console.log('\n=== Address scan keeps the wallet on its own branch ===');
     'updateScannedWalletsDisplay',
     src
   )(
+    CryptoJS,
+    elliptic,
+    { log() {}, error() {} },
     {},
     { masterKey: 'aa'.repeat(32), masterChainCode: 'bb'.repeat(32), isAlphaWallet: true, descriptorPath: "44'/0'/0'" },
     {},
@@ -430,17 +439,16 @@ console.log('\n=== Address scan keeps the wallet on its own branch ===');
     () => {},
     () => {}
   );
-  sandbox.selectWalletForImport({
-    index: 3,
-    address: 'alpha1qexample',
-    publicKey: '02'.repeat(17),
-    path: "m/44'/0'/0'/0/3",
-    privateKey: 'cc'.repeat(32),
-  });
+  const real3 = sandbox.deriveAddressAtIndex('aa'.repeat(32), 'bb'.repeat(32), 3, true, false, "44'/0'/0'");
+  // A listed entry whose stored private key is wrong (e.g. a tampered scan cache).
+  sandbox.selectWalletForImport({ ...real3, privateKey: 'cc'.repeat(32) });
   const picked = sandbox.getWallet();
   check('picking a scanned address persists descriptorPath', picked.descriptorPath, "44'/0'/0'");
   check('picking a scanned address keeps the chain code', picked.masterChainCode, 'bb'.repeat(32));
   check('picking a scanned address keeps the index', picked.addresses[0].index, 3);
+  check('picking ignores the listed private key and re-derives it', picked.childPrivateKey, real3.privateKey);
+  sandbox.selectWalletForImport({ ...real3, index: 3, address: 'alpha1qexample' });
+  check('an entry whose address the key does not derive is refused', sandbox.getWallet().addresses[0].address, real3.address);
 }
 
 console.log('\n=== Text backup round-trip keeps the branch ===');
@@ -624,6 +632,12 @@ console.log('\n=== Text backup restores the address it was saved on, not index 0
   check('restore lands on the saved address', back.addresses[0].address, saved.addresses[0].address);
   check('restore recovers the saved signing key', back.childPrivateKey, saved.childPrivateKey);
   check('restore keeps the branch', back.descriptorPath, "44'/0'/0'");
+  check('selection checked against the recorded address is marked verified',
+    w.resolveHdSelectionFromBackup(text, MASTER, CHAIN).verified, true);
+  check('selection found by search is marked verified',
+    w.resolveHdSelectionFromBackup(backupOf(saved, { withAddressPath: false }), MASTER, CHAIN).verified, true);
+  check('ADDRESS PATH with no recorded address is NOT verified',
+    w.resolveHdSelectionFromBackup(text.replace(/YOUR ADDRESSES:[\s\S]*$/, ''), MASTER, CHAIN).verified, false);
 
   // Change-chain address survives too.
   const change = w.buildHdWallet({ masterPrivateKey: MASTER, masterChainCode: CHAIN, descriptorPath: "44'/0'/0'", chain: 1, index: 2 });
@@ -706,6 +720,47 @@ console.log('\n=== Save-time check: the backup restores the same address AND sig
     /chain code/.test(w.checkBackupRestoresWallet(text.replace(CHAIN, CHAIN.replace(/^8/, '9')), MASTER, wallet) || ''), true);
   check('standard (HMAC) wallets are left to the existing checks',
     w.checkBackupRestoresWallet('anything', MASTER, { masterChainCode: null, isImportedAlphaWallet: false }), null);
+}
+
+console.log('\n=== Key/address invariant: signing key must match the address and the master key ===');
+{
+  const w = loadFromIndex(
+    [...DERIVATION_FNS, ...BIP39_FNS, 'checkWalletKeyIntegrity'],
+    ['CHARSET', 'BIP39_WORDLIST', 'SPHERE_DESCRIPTOR_PATH']
+  );
+  const MASTER = 'e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35';
+  const CHAIN = '873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508';
+  const good = w.buildHdWallet({ masterPrivateKey: MASTER, masterChainCode: CHAIN, descriptorPath: "44'/0'/0'", index: 3 });
+  const other = w.buildHdWallet({ masterPrivateKey: MASTER, masterChainCode: CHAIN, descriptorPath: "44'/0'/0'", index: 1 });
+  check('consistent BIP32 wallet passes', w.checkWalletKeyIntegrity(good), null);
+  check('signing key of another address is caught',
+    /does not belong to address/.test(w.checkWalletKeyIntegrity({ ...good, childPrivateKey: other.childPrivateKey }) || ''), true);
+  check('wrong stored public key is caught',
+    /public key/.test(w.checkWalletKeyIntegrity({
+      ...good, addresses: [{ ...good.addresses[0], publicKey: other.addresses[0].publicKey }],
+    }) || ''), true);
+  // Key and address agree with each other but are not what the master key derives at that path.
+  const swapped = { ...good, childPrivateKey: other.childPrivateKey, addresses: [{ ...other.addresses[0], path: good.addresses[0].path }] };
+  check('key+address not derived by the master key at the stored path is caught',
+    /master key does not derive/.test(w.checkWalletKeyIntegrity(swapped) || ''), true);
+  check('BIP32 wallet with a different master key is caught',
+    /master key does not derive/.test(w.checkWalletKeyIntegrity({ ...good, masterPrivateKey: MASTER.replace(/^e/, 'f') }) || ''), true);
+  check('addresses with no signing key is a failure',
+    /no signing key/.test(w.checkWalletKeyIntegrity({ ...good, childPrivateKey: null }) || ''), true);
+  check('upper-case signing key is accepted', w.checkWalletKeyIntegrity({ ...good, childPrivateKey: good.childPrivateKey.toUpperCase() }), null);
+  check('wallet with no address yet has nothing to check',
+    w.checkWalletKeyIntegrity({ masterPrivateKey: MASTER, addresses: [], childPrivateKey: null }), null);
+
+  // App-created (HMAC) wallets.
+  const h0 = w.deriveAddressAtIndex(SDK_WIF_WALLET.masterKey, null, 0, false, false, null);
+  const h1 = w.deriveAddressAtIndex(SDK_WIF_WALLET.masterKey, null, 1, false, false, null);
+  const hmac = {
+    masterPrivateKey: SDK_WIF_WALLET.masterKey, isImportedAlphaWallet: false, masterChainCode: null,
+    childPrivateKey: h0.privateKey, addresses: [{ index: 0, address: h0.address, publicKey: h0.publicKey, path: h0.path }],
+  };
+  check('consistent HMAC wallet passes', w.checkWalletKeyIntegrity(hmac), null);
+  check('HMAC wallet with another index key is caught',
+    /does not belong to address/.test(w.checkWalletKeyIntegrity({ ...hmac, childPrivateKey: h1.privateKey }) || ''), true);
 }
 
 console.log('\n=== Sphere export: v2 authenticated encryption + anchors ===');
