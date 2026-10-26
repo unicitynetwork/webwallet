@@ -775,7 +775,7 @@
                         <span id="scanCounter" style="float: right;">0 / 100</span>
                     </div>
                     <div style="margin-top: 8px; text-align: center;">
-                        <button class="button" id="stopScanBtn" onclick="scanningActive = false;" style="background-color: #d0d0d0; padding: 4px 12px; font-size: 12px;">Stop Scan</button>
+                        <button class="button" id="stopScanBtn" onclick="stopWalletScan()" style="background-color: #d0d0d0; padding: 4px 12px; font-size: 12px;">Stop Scan</button>
                     </div>
                 </div>
                 <div id="foundWalletsList" style="max-height: 250px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; padding: 8px; margin-top: 10px;">
@@ -5113,7 +5113,7 @@ Anyone with your master private key can access all your funds.`;
                                     // Chain code is at bytes 13-45 (32 bytes)
                                     const chainCodeBytes = decoded.slice(13, 45);
                                     masterChainCode = Array.from(chainCodeBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-                                    console.log('Extracted master chain code from depth 0 xpub:', masterChainCode);
+                                    console.log('Extracted master chain code from depth 0 xpub');
                                     foundMasterChainCode = true;
                                 }
                             } catch (e) {
@@ -5653,6 +5653,9 @@ Anyone with your master private key can access all your funds.`;
             
             // Global variables for scanning
             let scanningActive = false;
+            // The Stop button's inline handler runs in global scope and cannot reach this
+            // closure variable (it used to set a global of the same name, so scans never stopped).
+            window.stopWalletScan = function() { scanningActive = false; };
             let scannedWallets = [];
             let extractedWalletData = null;
             let lastScannedWalletData = null; // Store scan results persistently
@@ -6202,9 +6205,10 @@ Anyone with your master private key can access all your funds.`;
                         backupSelection
                     };
                     
+                    // Never log key material - only what was found.
                     console.log('Extracted wallet data:', {
-                        masterKey: masterKey,
-                        masterChainCode: masterChainCode,
+                        hasMasterKey: !!masterKey,
+                        hasChainCode: !!masterChainCode,
                         descriptorPath: descriptorPath,
                         isAlphaWallet: isAlphaWallet,
                         keyLength: masterKey ? masterKey.length : 0
@@ -6330,7 +6334,7 @@ Anyone with your master private key can access all your funds.`;
                 }
                 
                 const mkeyData = walletData.slice(dataStart, dataStart + 48);
-                console.log('Encrypted master key data:', Array.from(mkeyData).map(b => b.toString(16).padStart(2, '0')).join(''));
+                console.log('Encrypted master key record found:', mkeyData.length, 'bytes');
                 
                 // Try common Bitcoin/Alpha Core encryption formats
                 // Format appears to be: salt(8) + encrypted_data(40)
@@ -6455,7 +6459,7 @@ Anyone with your master private key can access all your funds.`;
                                     
                                     if (isValidPrivateKey(privKeyHex)) {
                                         masterKey = privKeyHex;
-                                        console.log(`Found valid private key (pattern 1): ${privKeyHex}`);
+                                        console.log('Found valid private key (pattern 1)');
                                         break;
                                     }
                                 }
@@ -6475,7 +6479,7 @@ Anyone with your master private key can access all your funds.`;
                                     
                                     if (isValidPrivateKey(privKeyHex)) {
                                         masterKey = privKeyHex;
-                                        console.log(`Found valid private key (pattern 2): ${privKeyHex}`);
+                                        console.log('Found valid private key (pattern 2)');
                                         break;
                                     }
                                 }
@@ -6605,7 +6609,7 @@ Anyone with your master private key can access all your funds.`;
                                 // Chain code is at bytes 13-45 (32 bytes)
                                 const chainCodeBytes = decoded.slice(13, 45);
                                 masterChainCode = Array.from(chainCodeBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-                                console.log('Extracted master chain code from depth 0 xpub:', masterChainCode);
+                                console.log('Extracted master chain code from depth 0 xpub');
                                 foundMasterChainCode = true;
                             } else {
                                 console.log('Found xpub at depth', depth, '- skipping, looking for master (depth 0)');
@@ -7631,7 +7635,7 @@ Anyone with your master private key can access all your funds.`;
                                     restoreStatus.style.display = 'block';
                                     return;
                                 }
-                                console.log('Successfully decrypted master key:', masterKey.substring(0, 8) + '...');
+                                console.log('Successfully decrypted master key');
                             } catch (e) {
                                 restoreStatus.className = 'info-box error';
                                 restoreStatus.textContent = 'Error decrypting wallet: ' + e.message;
@@ -7797,7 +7801,6 @@ Anyone with your master private key can access all your funds.`;
                         const derivationPath = `m/44'/0'/${addressIndex}'`;
                         
                         console.log('Attempting to derive child key for path:', derivationPath);
-                        console.log('Master key (first 8 chars):', wallet.masterPrivateKey ? wallet.masterPrivateKey.substring(0, 8) + '...' : 'null');
                         
                         // Derive child key using HMAC (standard wallet method)
                         const hmacInput = CryptoJS.enc.Hex.parse(wallet.masterPrivateKey);
@@ -7805,7 +7808,6 @@ Anyone with your master private key can access all your funds.`;
                         const hmacOutput = CryptoJS.HmacSHA512(hmacInput, hmacKey).toString();
                         const childPrivateKey = hmacOutput.substring(0, 64);
                         
-                        console.log('Derived child private key (first 8 chars):', childPrivateKey.substring(0, 8) + '...');
                         
                         // Generate address from the derived key to verify
                         const ec = new elliptic.ec('secp256k1');
@@ -7824,7 +7826,6 @@ Anyone with your master private key can access all your funds.`;
                             console.log('✓ Address verification successful! Recovered childPrivateKey correctly.');
                             console.log('  Address:', wallet.addresses[0].address);
                             console.log('  Path:', derivationPath);
-                            console.log('  Child Private Key (first 8 chars):', childPrivateKey.substring(0, 8) + '...');
                             wallet.childPrivateKey = childPrivateKey;
                             wallet.addresses[0].publicKey = publicKey;
                             wallet.addresses[0].path = derivationPath;
@@ -11685,6 +11686,8 @@ Anyone with your master private key can access all your funds.`;
             // ============================================
             
             // SECURITY: Sanitize debug data to prevent private key leakage
+            // submitDebugReport() lives outside this scope; it re-sanitizes before sending.
+            window.sanitizeDebugData = sanitizeDebugData;
             function sanitizeDebugData(data) {
                 if (!data || typeof data !== 'object') return data;
                 
@@ -11794,7 +11797,7 @@ Anyone with your master private key can access all your funds.`;
                         // Also log to console for immediate visibility
                         const consoleMsg = `[TX Debug ${this.id}] [${level.toUpperCase()}] ${message}`;
                         if (data && Object.keys(data).length > 0) {
-                            console.log(consoleMsg, data);
+                            console.log(consoleMsg, sanitizedData);   // never the raw data
                         } else {
                             console.log(consoleMsg);
                         }
@@ -15220,6 +15223,24 @@ Anyone with your master private key can access all your funds.`;
                 }
             };
             
+            // Say exactly what leaves the browser, and where, before sending anything.
+            const reportHost = 'unicity-debug-report.dyndns.org';
+            const consent = confirm(
+                `Send this debug report to ${reportHost}?\n\n` +
+                `It contains ${report.metadata.totalSessions} debug session(s) with your wallet address(es), ` +
+                `transaction IDs and raw transaction data (${failedTxs.length} failed transaction(s)), ` +
+                `and your browser's user agent.\n\n` +
+                `It does not contain private keys or your recovery phrase.`
+            );
+            if (!consent) {
+                showInAppNotification('Report Not Sent', 'The debug report was not sent.', 'info');
+                return;
+            }
+            // Defence in depth: sessions were sanitized when logged; sanitize again before sending.
+            if (window.sanitizeDebugData) {
+                report.sessions = window.sanitizeDebugData(report.sessions);
+            }
+
             try {
                 // Try to submit to the debug service
                 const response = await fetch('https://unicity-debug-report.dyndns.org:3487/api/submit-report', {
