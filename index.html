@@ -9111,6 +9111,36 @@ Anyone with your master private key can access all your funds.`;
                     if (callback) callback(null, err.message);
                 }
             }
+
+            /**
+             * Fetch a transaction plus the transactions its inputs spend, caching all of them.
+             * calculateTransactionAmount() decides sent vs received by whether an input was ours,
+             * which it can only see for a spent coin through the previous transaction. Without
+             * this, an own spend whose change returns to us is announced as "Received".
+             */
+            function getTxDetailsWithInputs(txid, callback) {
+                electrumRequest('blockchain.transaction.get', [txid, true], function(txDetails) {
+                    if (!txDetails || !Array.isArray(txDetails.vin)) {
+                        callback(txDetails);
+                        return;
+                    }
+                    transactionDetailsCache[txid] = txDetails;
+                    const missing = [...new Set(txDetails.vin
+                        .map(input => input && input.txid)
+                        .filter(prev => prev && !transactionDetailsCache[prev]))];
+                    if (missing.length === 0) {
+                        callback(txDetails);
+                        return;
+                    }
+                    let pending = missing.length;
+                    missing.forEach(prev => {
+                        electrumRequest('blockchain.transaction.get', [prev, true], function(prevDetails) {
+                            if (prevDetails) transactionDetailsCache[prev] = prevDetails;
+                            if (--pending === 0) callback(txDetails);
+                        });
+                    });
+                });
+            }
             
             // Convert Bech32 address to script hash for Electrum protocol
             function addressToScriptHash(address) {
@@ -9606,7 +9636,7 @@ Anyone with your master private key can access all your funds.`;
                         if (changes.hasChanged || currentTransactions.length === 0 || result.length === 0) {
                             // Update if changed OR if we have no transactions (after clearing) OR if result is empty
                             // Only show notifications if not initial load
-                            if (!isInitialLoad && changes.newTransactions.length > 0) {
+                            if (!isInitialLoad && currentTransactions.length > 0 && changes.newTransactions.length > 0) {
                                 // Only show notifications for truly new unconfirmed transactions
                                 // When a new tx arrives, we should only notify about that one
                                 const unconfirmedNewTxs = changes.newTransactions.filter(tx => tx.height === 0);
@@ -9619,7 +9649,7 @@ Anyone with your master private key can access all your funds.`;
                                 const shortTxid = txid.substring(0, 8) + '...' + txid.substring(txid.length - 8);
                                 
                                 // Fetch transaction details to determine direction
-                                electrumRequest('blockchain.transaction.get', [txid, true], function(txDetails) {
+                                getTxDetailsWithInputs(txid, function(txDetails) {
                                     // Cache the transaction details
                                     if (txDetails) {
                                         transactionDetailsCache[txid] = txDetails;
@@ -9748,7 +9778,11 @@ Anyone with your master private key can access all your funds.`;
                 // Update wallet info display if it exists
                 // Use Fulcrum's direct balance as authoritative total when available
                 if (walletBalance) {
-                    const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : confirmedBalance;
+                    // Total includes unconfirmed coins (shown again in brackets), the same as the
+                    // vested/unvested rows. Until Fulcrum's direct balance arrives (it is reset on
+                    // every load), confirmed-only would show 0 while change from a recent spend is
+                    // still unconfirmed.
+                    const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (confirmedBalance + unconfirmedBalance);
                     walletBalance.textContent = `${SatoshiMath.satoshisToAlpha(displayBalance)} ALPHA`;
                 }
                 if (walletUnconfirmed) {
@@ -12153,7 +12187,7 @@ Anyone with your master private key can access all your funds.`;
                                 
                                 if (changes.hasChanged) {
                                     // Only show notifications if not initial load
-                                    if (!isInitialLoad && changes.newTransactions.length > 0) {
+                                    if (!isInitialLoad && currentTransactions.length > 0 && changes.newTransactions.length > 0) {
                                         // Only show notifications for truly new unconfirmed transactions
                                         // When a new tx arrives, we should only notify about that one
                                         const unconfirmedNewTxs = changes.newTransactions.filter(tx => tx.height === 0);
@@ -12166,7 +12200,7 @@ Anyone with your master private key can access all your funds.`;
                                         const shortTxid = txid.substring(0, 8) + '...' + txid.substring(txid.length - 8);
                                         
                                         // Fetch transaction details to determine direction
-                                        electrumRequest('blockchain.transaction.get', [txid, true], function(txDetails) {
+                                        getTxDetailsWithInputs(txid, function(txDetails) {
                                             // Cache the transaction details
                                             if (txDetails) {
                                                 transactionDetailsCache[txid] = txDetails;
