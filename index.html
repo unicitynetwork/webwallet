@@ -347,38 +347,24 @@
         .panel-title { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
         .panel-sub { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--text-3); }
 
-        /* Vesting meter = Spend from */
+        /* Balance breakdown: what the balance is made of. It only informs; Pay with in the send sheet picks the coins. */
         #walletInfo { min-width: 0; }
         .meter { display: flex; gap: 6px; margin-top: 16px; }
-        .seg { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-width: 0; min-height: 72px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); color: var(--text); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
-        .seg:hover { border-color: var(--line-hover); }
-        .seg input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
-        .seg:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .seg { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-width: 0; min-height: 72px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); color: var(--text); }
         .seg-all { flex: 0 0 168px; }
         .seg-split { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; }
         .seg-vested { flex: var(--w-vested, 50) 1 0px; border-radius: var(--r) 4px 4px var(--r); border-color: var(--line-2); background: var(--hatch), var(--raised); }
         .seg-unvested { flex: var(--w-unvested, 50) 1 0px; border-radius: 4px var(--r) var(--r) 4px; }
         .seg-label { display: flex; align-items: center; gap: 6px; width: 100%; font-size: 13px; line-height: 18px; font-weight: 600; color: inherit; white-space: nowrap; }
         .seg-label svg { width: 14px; height: 14px; }
-        .seg-ring { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1.5px solid var(--text-off); border-radius: 999px; flex: none; }
-        .seg-ring svg { display: none; width: 10px; height: 10px; }
         .seg-amt { font-size: 15px; line-height: 20px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .seg-amt .dec { color: var(--text-3); }
-        .vesting-row.selected { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-        .seg-vested.selected { background: repeating-linear-gradient(135deg, rgba(2,2,2,0.18) 0px, rgba(2,2,2,0.18) 1.5px, rgba(2,2,2,0) 1.5px, rgba(2,2,2,0) 7px), var(--accent); }
-        .vesting-row.selected .seg-ring { border: 0; background: var(--on-accent); }
-        .vesting-row.selected .seg-ring svg { display: block; }
-        .vesting-row.selected .seg-amt { font-weight: 600; }
-        .vesting-row.selected .seg-amt .dec { color: rgba(2,2,2,0.72); }
+        .seg-all .seg-amt { font-weight: 600; }
         .vesting-src { display: none; }
         .meter-legend { display: flex; gap: 6px; margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-3); }
         .meter-legend > span:first-child { flex: 0 0 168px; padding-left: 2px; }
         .meter-legend .split { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; }
         .meter-legend .split span { min-width: 0; padding-left: 2px; }
-        .meter-max { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-        .meter-max .k { font-size: 13px; line-height: 18px; color: var(--text-2); }
-        .meter-max .v { font-size: 14px; line-height: 20px; font-weight: 500; text-align: right; }
-        .meter-max .v .u { font-weight: 400; color: var(--text-3); }
         .classify { display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 16px; color: var(--text-3); white-space: nowrap; }
 
         /* Status panel */
@@ -533,6 +519,26 @@
         .amount-row input { flex: 1 1 auto; font-size: 20px; font-weight: 600; }
         .amount-row .btn { height: 48px; }
         .field-hint { margin-top: 6px; font-size: 12px; line-height: 16px; color: var(--text-3); }
+        /* Pay with: which coins the send may spend */
+        .field-label { margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text); }
+        .coin-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+        .cp { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--bg); cursor: pointer; }
+        .cp:hover { border-color: var(--line-hover); }
+        .cp:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+        #coinPick .cp input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        .cp-t { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+        .cp-a { font-size: 13px; line-height: 18px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .cp-a .dec { color: var(--text-3); }
+        .cp-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+        .cp-vested .cp-sw { background: repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 1px, transparent 1px 3px); outline: 1px solid rgba(255,255,255,0.30); outline-offset: -1px; }
+        .cp-unvested .cp-sw { background: var(--warm); }
+        .cp.selected { border-color: var(--accent); background: var(--accent-fill); }
+        .cp.selected .cp-t { color: var(--text); }
+        @media (max-width: 560px) {
+            /* Three columns clip eight decimals on a phone, so the options become rows */
+            .coin-pick { grid-template-columns: 1fr; gap: 4px; }
+            .cp { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+        }
         .fee-note { display: flex; gap: 10px; margin-top: 16px; padding: 12px 14px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); font-size: 12px; line-height: 16px; color: var(--text-2); }
 
         /* Review (transaction confirmation) */
@@ -998,7 +1004,7 @@
                             </section>
                         </section>
 
-                        <!-- Right: Spend from, node and addresses -->
+                        <!-- Right: balance breakdown, node and addresses -->
                         <div class="hero-right">
                             <!-- Welcome: ways to start -->
                             <section class="panel needs-empty" aria-labelledby="startTitle">
@@ -1038,46 +1044,39 @@
                                 </div>
                             </section>
 
-                            <!-- Vesting meter that is also the Spend from control -->
+                            <!-- Balance breakdown: vested and unvested shares. Which coins pay is picked in the send sheet. -->
                             <div id="walletInfo" style="display: none;">
-                                <section class="panel" aria-labelledby="spendTitle">
+                                <section class="panel" aria-labelledby="balanceTitle">
                                     <div class="panel-head">
                                         <div>
-                                            <h2 class="panel-title" id="spendTitle">Spend from</h2>
-                                            <p class="panel-sub">Send and Max use only the coins you pick here.</p>
+                                            <h2 class="panel-title" id="balanceTitle">Balance breakdown</h2>
+                                            <p class="panel-sub">What your balance is made of. You pick which coins pay when you send.</p>
                                         </div>
                                         <div id="vestingClassificationProgress" class="classify" style="display: none;" role="status">
                                             <span class="spinner" aria-hidden="true"></span>
                                             <span>Classifying coins <span id="vestingProgressText">0/0</span></span>
                                         </div>
                                     </div>
-                                    <div id="vestingBalanceSection" class="meter" role="radiogroup" aria-label="Spend from">
-                                        <label class="seg seg-all vesting-row vesting-row-all">
-                                            <input type="radio" name="vestingMode" value="all" checked="checked" onchange="setVestingMode('all')">
-                                            <span class="seg-label">All<span class="seg-ring" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#FF6F00" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span></span>
+                                    <div id="vestingBalanceSection" class="meter" role="group" aria-label="Balance by coin type">
+                                        <div class="seg seg-all">
+                                            <span class="seg-label">All</span>
                                             <span class="seg-amt" id="segAll">0<span class="dec">.00000000</span></span>
                                             <span class="vesting-src"><span id="walletBalance">0 ALPHA</span><span id="walletUnconfirmed"></span></span>
-                                        </label>
+                                        </div>
                                         <div class="seg-split">
-                                            <label class="seg seg-vested vesting-row vesting-row-vested">
-                                                <input type="radio" name="vestingMode" value="vested" onchange="setVestingMode('vested')">
+                                            <div class="seg seg-vested">
                                                 <span class="seg-label">
                                                     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                                                     Vested
-                                                    <span class="seg-ring" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#FF6F00" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
                                                 </span>
                                                 <span class="seg-amt" id="segVested">0<span class="dec">.00000000</span></span>
                                                 <span class="vesting-src"><span id="vestedBalance">0 ALPHA</span><span id="vestedUnconfirmed"></span></span>
-                                            </label>
-                                            <label class="seg seg-unvested vesting-row vesting-row-unvested">
-                                                <input type="radio" name="vestingMode" value="unvested" onchange="setVestingMode('unvested')">
-                                                <span class="seg-label">
-                                                    Unvested
-                                                    <span class="seg-ring" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#FF6F00" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
-                                                </span>
+                                            </div>
+                                            <div class="seg seg-unvested">
+                                                <span class="seg-label">Unvested</span>
                                                 <span class="seg-amt" id="segUnvested">0<span class="dec">.00000000</span></span>
                                                 <span class="vesting-src"><span id="unvestedBalance">0 ALPHA</span><span id="unvestedUnconfirmed"></span></span>
-                                            </label>
+                                            </div>
                                         </div>
                                     </div>
                                     <div class="meter-legend">
@@ -1086,10 +1085,6 @@
                                             <span style="flex: var(--w-vested, 50) 1 0px;"><span id="legendVested">0%</span> · locked after TGE<br>Mined up to block 280,000</span>
                                             <span style="flex: var(--w-unvested, 50) 1 0px;"><span id="legendUnvested">0%</span> · not locked<br>Mined after block 280,000</span>
                                         </div>
-                                    </div>
-                                    <div class="meter-max">
-                                        <span class="k">Max you can send from <span id="maxMode">All</span></span>
-                                        <span class="v"><span id="maxValue">0.00000000</span> <span class="u">ALPHA minus fees</span></span>
                                     </div>
                                 </section>
                             </div>
@@ -1304,9 +1299,29 @@
                 <span class="mini" aria-hidden="true"></span>
                 <div style="min-width: 0;">
                     <div class="t" id="sendFromName">Wallet</div>
-                    <div class="s" id="sendFromMode">Spending from All</div>
+                    <div class="s" id="sendFromMode">Paying with All</div>
                 </div>
-                <button type="button" class="btn btn-ghost btn-sm" style="margin-left: auto;" onclick="shellCloseSend(); document.getElementById('spendTitle').scrollIntoView({ behavior: 'smooth', block: 'center' });">Change</button>
+            </div>
+            <!-- Which coins pay: the wallet's own vestingMode radios (setVestingMode highlights .vesting-row-*) -->
+            <div class="field needs-wallet">
+                <div class="field-label" id="coinPickLabel">Pay with</div>
+                <div class="coin-pick" id="coinPick" role="radiogroup" aria-labelledby="coinPickLabel">
+                    <label class="cp vesting-row vesting-row-all" title="Every coin in this wallet">
+                        <input type="radio" name="vestingMode" value="all" checked="checked" onchange="setVestingMode('all')">
+                        <span class="cp-t">All coins</span>
+                        <span class="cp-a" id="coinPickAll">0<span class="dec">.00000000</span></span>
+                    </label>
+                    <label class="cp cp-vested vesting-row vesting-row-vested" title="Mined up to block 280,000, locked after TGE">
+                        <input type="radio" name="vestingMode" value="vested" onchange="setVestingMode('vested')">
+                        <span class="cp-t"><span class="cp-sw" aria-hidden="true"></span>Vested</span>
+                        <span class="cp-a" id="coinPickVested">0<span class="dec">.00000000</span></span>
+                    </label>
+                    <label class="cp cp-unvested vesting-row vesting-row-unvested" title="Mined after block 280,000, not locked">
+                        <input type="radio" name="vestingMode" value="unvested" onchange="setVestingMode('unvested')">
+                        <span class="cp-t"><span class="cp-sw" aria-hidden="true"></span>Unvested</span>
+                        <span class="cp-a" id="coinPickUnvested">0<span class="dec">.00000000</span></span>
+                    </label>
+                </div>
             </div>
             <div class="field">
                 <label for="recipientAddress">To</label>
@@ -1318,7 +1333,7 @@
                     <input type="number" id="sendAmount" placeholder="0.00000000" step="0.00000001" min="0" inputmode="decimal">
                     <button type="button" onclick="calculateMaxAmount()" class="btn" title="Calculate maximum sendable amount">Max</button>
                 </div>
-                <div class="field-hint">Max uses only the coins picked in Spend from and leaves room for the fees.</div>
+                <div class="field-hint">Max uses only the coins picked above and leaves room for the fees.</div>
             </div>
             <div class="fee-note">
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
@@ -14303,7 +14318,7 @@ Anyone with your master private key can access all your funds.`;
             // ===== Ember Card shell =====
             // A thin view layer. The wallet logic keeps writing to the same elements as before
             // (balances, address, the visibility of walletInfo); this reads them and draws the card,
-            // the stack of saved wallets, the Spend from meter and the node status from them.
+            // the stack of saved wallets, the balance breakdown, Pay with and the node status from them.
 
             function formatAlphaInt(intPart) {
                 const digits = String(intPart || '0').replace(/[^0-9]/g, '') || '0';
@@ -14422,6 +14437,7 @@ Anyone with your master private key can access all your funds.`;
                 document.getElementById('legendVested').textContent = total > 0 ? share.toFixed(1) + '%' : '0%';
                 document.getElementById('legendUnvested').textContent = total > 0 ? (100 - share).toFixed(1) + '%' : '0%';
 
+                // Pay with in the send sheet holds the wallet's vestingMode radios
                 const mode = currentMode();
                 ['all', 'vested', 'unvested'].forEach(m => {
                     const row = document.querySelector('.vesting-row-' + m);
@@ -14429,10 +14445,11 @@ Anyone with your master private key can access all your funds.`;
                     const radio = document.querySelector('input[name="vestingMode"][value="' + m + '"]');
                     if (radio) radio.checked = m === mode;
                 });
+                setAmount(document.getElementById('coinPickAll'), allText);
+                setAmount(document.getElementById('coinPickVested'), vestedText);
+                setAmount(document.getElementById('coinPickUnvested'), unvestedText);
                 const max = splitAlpha(document.getElementById(MODE_SOURCES[mode]).textContent);
-                document.getElementById('maxMode').textContent = MODE_NAMES[mode];
-                document.getElementById('maxValue').textContent = `${max.int}.${max.dec}`;
-                document.getElementById('sendFromMode').textContent = `Spending from ${MODE_NAMES[mode]} · ${max.int}.${max.dec} ALPHA available`;
+                document.getElementById('sendFromMode').textContent = `Paying with ${MODE_NAMES[mode]} · ${max.int}.${max.dec} ALPHA available`;
 
                 const pending = splitAlpha(document.getElementById('walletUnconfirmed').textContent);
                 const pendingPill = document.getElementById('cardPending');
@@ -15044,7 +15061,7 @@ Anyone with your master private key can access all your funds.`;
             
             <h3 style="margin-top: 20px; margin-bottom: 15px; color: var(--text);">Sending Funds</h3>
             <ul style="margin-bottom: 20px;">
-                <li><strong>Online Mode:</strong> Press "Send", enter the recipient address and amount, press "Review", check the fee, then "Confirm &amp; Sign". Signed transactions are broadcast at once. The "Spend from" panel picks which coins pay: all, vested or unvested.</li>
+                <li><strong>Online Mode:</strong> Press "Send", enter the recipient address and amount, press "Review", check the fee, then "Confirm &amp; Sign". Signed transactions are broadcast at once. "Pay with" in the Send sheet picks which coins pay: all, vested or unvested. The "Balance breakdown" panel on the main page shows how much of each you hold.</li>
                 <li><strong>Offline Mode (Cold Wallet) - Two Options:</strong>
                     <div style="margin-top: 10px; padding: 10px; background-color: var(--well); border-radius: 4px;">
                         <strong>Option A: Prepare Transaction Online (Recommended)</strong>
@@ -15092,7 +15109,7 @@ Anyone with your master private key can access all your funds.`;
                     </ul>
                 </li>
                 <li><strong>Broadcast Button:</strong> In the tool bar next to Cold tools and All wallets. Press it to import and broadcast signed transaction files. It needs a node connection, and it also works while watching an address.</li>
-                <li><strong>Max Button:</strong> In the Send sheet, fills in the most you can send from the coins picked under "Spend from", after fees</li>
+                <li><strong>Max Button:</strong> In the Send sheet, fills in the most you can send from the coins picked under "Pay with", after fees</li>
             </ul>
             
             <h3 style="margin-top: 20px; margin-bottom: 15px; color: var(--text);">Additional Features</h3>
