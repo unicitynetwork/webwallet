@@ -34,3 +34,6 @@ debug-service/DEBUG_ANALYSIS.md
 # Test scripts (can be regenerated)
 test_bigint_precision.js
 .claude
+
+# Wallet files must never be committed (they contain private keys)
+*.dat
