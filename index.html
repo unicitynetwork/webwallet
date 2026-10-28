@@ -1985,8 +1985,16 @@ Anyone with your master private key can access all your funds.`;
             let unconfirmedVestedBalance = 0n;
             let unconfirmedUnvestedBalance = 0n;
 
-            // Direct balance from Fulcrum for verification
+            // Direct balance from Fulcrum for verification, and the address it was read for
             let fulcrumDirectBalance = 0n;
+            let fulcrumDirectBalanceAddress = null;
+            // A balance read for one address must never stand in for another one (a wallet switch,
+            // a new or restored wallet, another watched address). The next read for it refills it.
+            function forgetDirectBalance() {
+                fulcrumDirectBalance = 0n;
+                fulcrumDirectBalanceAddress = null;
+                balanceRetryCount = 0;
+            }
 
             // Server-side vesting: true when connected Fulcrum provides vesting fields
             let serverProvidesVesting = false;
@@ -3267,6 +3275,9 @@ Anyone with your master private key can access all your funds.`;
                 
                 // Generate QR code
                 generateWalletQRCode(addressInfo.address);
+
+                // A direct balance read for another address must not stand in for this one
+                if (fulcrumDirectBalanceAddress !== addressInfo.address) forgetDirectBalance();
                 
                 // Update balance display
                 updateCommonBalance();
@@ -4928,6 +4939,8 @@ Anyone with your master private key can access all your funds.`;
                         return;
                     }
                     if (result && result.confirmed != null) {
+                        // A late answer for an address that is no longer on screen is dropped
+                        if (address !== getCurrentVestingAddress()) return;
                         // Include unconfirmed so total matches listunspent (which includes mempool UTXOs)
                         try {
                             fulcrumDirectBalance = BigInt(result.confirmed) + BigInt(result.unconfirmed || 0);
@@ -4935,6 +4948,7 @@ Anyone with your master private key can access all your funds.`;
                             console.error('[BalanceVerify] Invalid balance value from server:', result, e);
                             return;
                         }
+                        fulcrumDirectBalanceAddress = address;
                         console.log(`[BalanceVerify] Fulcrum direct balance: ${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA`);
 
                         // Note: serverProvidesVesting is set exclusively from UTXO data in
@@ -9746,6 +9760,7 @@ Anyone with your master private key can access all your funds.`;
                             if (decoded) {
                                 const oldAddress = watchOnlyAddressValue;
                                 watchOnlyAddressValue = address;
+                                if (address !== oldAddress) forgetDirectBalance();
                                 refreshWatchOnlyBalance(address);
                                 
                                 // Update subscription if connected
