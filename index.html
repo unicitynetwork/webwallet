@@ -529,9 +529,17 @@
         .cp-t { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
         .cp-a { font-size: 13px; line-height: 18px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .cp-a .dec { color: var(--text-3); }
+        /* Coin kinds keep one look everywhere: hatched vested, warm unvested, half and half for all */
         .cp-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-        .cp-vested .cp-sw { background: repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 1px, transparent 1px 3px); outline: 1px solid rgba(255,255,255,0.30); outline-offset: -1px; }
-        .cp-unvested .cp-sw { background: var(--warm); }
+        .sw-vested { background: repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 1px, transparent 1px 3px); outline: 1px solid rgba(255,255,255,0.30); outline-offset: -1px; }
+        .sw-unvested { background: var(--warm); }
+        .sw-all { background: linear-gradient(90deg, rgba(255,255,255,0.55) 50%, var(--warm) 50%); }
+        /* The Paying with line names the coins in their colour so the choice cannot be missed */
+        .mode-chip { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 6px; border-radius: var(--r-sm); border: 1px solid var(--line-4); background: var(--hover); color: var(--text); font-weight: 600; vertical-align: 1px; }
+        .mode-chip .cp-sw { width: 8px; height: 8px; border-radius: 2px; }
+        .mode-chip.mode-vested { border-color: rgba(255,255,255,0.30); background: var(--hatch), var(--hover); }
+        .mode-chip.mode-unvested { color: var(--warm); background: rgba(255,226,204,0.10); border-color: rgba(255,226,204,0.28); }
+        .send-from .s strong { color: var(--text); font-weight: 600; }
         .cp.selected { border-color: var(--accent); background: var(--accent-fill); }
         .cp.selected .cp-t { color: var(--text); }
         @media (max-width: 560px) {
@@ -1308,17 +1316,17 @@
                 <div class="coin-pick" id="coinPick" role="radiogroup" aria-labelledby="coinPickLabel">
                     <label class="cp vesting-row vesting-row-all" title="Every coin in this wallet">
                         <input type="radio" name="vestingMode" value="all" checked="checked" onchange="setVestingMode('all')">
-                        <span class="cp-t">All coins</span>
+                        <span class="cp-t"><span class="cp-sw sw-all" aria-hidden="true"></span>All coins</span>
                         <span class="cp-a" id="coinPickAll">0<span class="dec">.00000000</span></span>
                     </label>
                     <label class="cp cp-vested vesting-row vesting-row-vested" title="Mined up to block 280,000, locked after TGE">
                         <input type="radio" name="vestingMode" value="vested" onchange="setVestingMode('vested')">
-                        <span class="cp-t"><span class="cp-sw" aria-hidden="true"></span>Vested</span>
+                        <span class="cp-t"><span class="cp-sw sw-vested" aria-hidden="true"></span>Vested</span>
                         <span class="cp-a" id="coinPickVested">0<span class="dec">.00000000</span></span>
                     </label>
                     <label class="cp cp-unvested vesting-row vesting-row-unvested" title="Mined after block 280,000, not locked">
                         <input type="radio" name="vestingMode" value="unvested" onchange="setVestingMode('unvested')">
-                        <span class="cp-t"><span class="cp-sw" aria-hidden="true"></span>Unvested</span>
+                        <span class="cp-t"><span class="cp-sw sw-unvested" aria-hidden="true"></span>Unvested</span>
                         <span class="cp-a" id="coinPickUnvested">0<span class="dec">.00000000</span></span>
                     </label>
                 </div>
@@ -14449,7 +14457,17 @@ Anyone with your master private key can access all your funds.`;
                 setAmount(document.getElementById('coinPickVested'), vestedText);
                 setAmount(document.getElementById('coinPickUnvested'), unvestedText);
                 const max = splitAlpha(document.getElementById(MODE_SOURCES[mode]).textContent);
-                document.getElementById('sendFromMode').textContent = `Paying with ${MODE_NAMES[mode]} · ${max.int}.${max.dec} ALPHA available`;
+                // "Paying with [Vested] · 15.20691644 ALPHA available", the kind shown in its colour
+                const payLine = document.getElementById('sendFromMode');
+                const chip = document.createElement('span');
+                chip.className = `mode-chip mode-${mode}`;
+                const swatch = document.createElement('span');
+                swatch.className = `cp-sw sw-${mode}`;
+                swatch.setAttribute('aria-hidden', 'true');
+                chip.append(swatch, mode === 'all' ? 'All coins' : MODE_NAMES[mode]);
+                const available = document.createElement('strong');
+                available.textContent = `${max.int}.${max.dec}`;
+                payLine.replaceChildren('Paying with ', chip, ' · ', available, ' ALPHA available');
 
                 const pending = splitAlpha(document.getElementById('walletUnconfirmed').textContent);
                 const pendingPill = document.getElementById('cardPending');
