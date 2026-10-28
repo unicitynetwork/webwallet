@@ -265,10 +265,12 @@
         .back-card[data-depth="2"] { background: linear-gradient(180deg, #151515 0%, #0f0f0f 30%); }
         .back-card[data-depth="3"] { background: linear-gradient(180deg, #121212 0%, #0d0d0d 30%); box-shadow: none; }
 
-        .wcard { position: relative; isolation: isolate; aspect-ratio: 540 / 340; min-height: 300px; padding: 28px; border-radius: var(--r-lg); overflow: hidden; background: linear-gradient(140deg, #1d1d1d 0%, #151515 42%, #0c0c0c 100%); border: 1px solid var(--line-2); box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 -10px 24px rgba(0,0,0,0.55), 0 32px 64px -24px rgba(0,0,0,0.95); }
+        .wcard { position: relative; isolation: isolate; display: flex; flex-direction: column; aspect-ratio: 540 / 340; min-height: 300px; padding: 28px; border-radius: var(--r-lg); overflow: hidden; overflow: clip; background: linear-gradient(140deg, #1d1d1d 0%, #151515 42%, #0c0c0c 100%); border: 1px solid var(--line-2); box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 -10px 24px rgba(0,0,0,0.55), 0 32px 64px -24px rgba(0,0,0,0.95); }
         .wcard-grain, .wcard-sheen { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; }
         .wcard-sheen { background: linear-gradient(118deg, rgba(255,255,255,0) 34%, rgba(255,255,255,0.045) 48%, rgba(255,255,255,0) 60%), radial-gradient(300px 220px at 100% 100%, rgba(255,111,0,0.07), rgba(255,111,0,0) 70%); }
-        .wcard-body { display: flex; flex-direction: column; justify-content: space-between; height: 100%; gap: 16px; }
+        /* overflow: clip (not hidden) lets the card outgrow its aspect ratio when the full address is open */
+        .wcard-body { flex: 1 0 auto; display: flex; flex-direction: column; gap: 16px; }
+        .wcard-body > :last-child { margin-top: auto; }
         .wcard-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
         .wcard-id { min-width: 0; }
         .wcard-net { display: flex; align-items: center; gap: 10px; height: 24px; }
@@ -279,7 +281,19 @@
         .badge { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: var(--r-sm); border: 1px solid var(--line-4); color: var(--text-2); font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; }
         .badge svg { width: 12px; height: 12px; }
         .wcard-addr { display: flex; align-items: center; gap: 2px; height: 32px; margin-top: 4px; }
-        #walletAddressLink { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; font-family: var(--mono); font-size: 14px; line-height: 20px; color: var(--text-soft); text-decoration: none; }
+        /* The short address unfolds the full one below; it sits above the card's explorer overlay */
+        .addr-toggle { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; height: 28px; margin: 0 0 0 -6px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: transparent; font-family: var(--mono); font-size: 14px; line-height: 20px; color: var(--text-soft); cursor: pointer; }
+        .addr-toggle:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+        .addr-toggle .chev { flex: none; width: 12px; height: 12px; color: var(--text-3); transition: transform 0.15s ease; }
+        .addr-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
+        /* Open: the same line shows the whole address, wrapping, and the card grows to fit it */
+        .wcard.addr-open { aspect-ratio: auto; }
+        .wcard.addr-open .wcard-addr { align-items: flex-start; height: auto; min-height: 32px; }
+        .wcard.addr-open .addr-toggle { align-items: flex-start; height: auto; padding-top: 4px; padding-bottom: 4px; color: var(--text); text-align: left; }
+        .wcard.addr-open .addr-toggle, .wcard.addr-open #cardAddrShort { min-width: 0; }
+        .wcard.addr-open #cardAddrShort { word-break: break-all; }
+        .wcard.addr-open .addr-toggle .chev { margin-top: 4px; }
+        #walletAddressLink { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--r-sm); color: var(--text-soft); text-decoration: none; }
         #walletAddressLink:hover { color: var(--text); }
         #walletAddressLink .ext { width: 12px; height: 12px; color: var(--text-3); }
         #walletAddressLink:hover .ext { color: var(--text); }
@@ -679,6 +693,7 @@
             .hero { margin-top: 20px; }
             .stack { --peek: 24px; }
             .wcard { min-height: 0; padding: 18px; }
+            .wcard.addr-open .addr-toggle { font-size: 12px; line-height: 16px; }
             .wcard-name { margin-top: 12px; }
             .qr-tile { width: 84px; height: 84px; padding: 8px; }
             .qr-tile img, .qr-tile canvas { width: 68px !important; height: 68px !important; }
@@ -960,7 +975,8 @@
                                                     <span id="cardBadges" style="display: contents;"></span>
                                                 </div>
                                                 <div class="wcard-addr">
-                                                    <a id="walletAddressLink" href="#" target="_blank" rel="noopener" title="Open address in explorer"><span id="cardAddrShort">-</span><span id="walletAddress">-</span><svg class="ext" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"></path><path d="M8 7h9v9"></path></svg></a>
+                                                    <button type="button" class="addr-toggle" id="cardAddrToggle" aria-expanded="false" title="Show the full address"><span id="cardAddrShort">-</span><svg class="chev" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+                                                    <a id="walletAddressLink" href="#" target="_blank" rel="noopener" title="Open address in explorer"><span id="walletAddress">-</span><svg class="ext" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"></path><path d="M8 7h9v9"></path></svg></a>
                                                     <button type="button" class="btn btn-icon" onclick="copyAddress('wallet')" aria-label="Copy address" title="Copy address">
                                                         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
                                                     </button>
@@ -3278,7 +3294,7 @@ Anyone with your master private key can access all your funds.`;
 
                 // A direct balance read for another address must not stand in for this one
                 if (fulcrumDirectBalanceAddress !== addressInfo.address) forgetDirectBalance();
-                
+
                 // Update balance display
                 updateCommonBalance();
                 
@@ -14503,6 +14519,21 @@ Anyone with your master private key can access all your funds.`;
                     `${pending.negative ? '−' : '+'}${pending.int}.${pending.dec} unconfirmed`;
             }
 
+            // The short address on the card turns into the full one in place, and back
+            function setAddressOpen(open) {
+                const toggle = document.getElementById('cardAddrToggle');
+                const address = walletAddress.dataset.address || '';
+                const card = document.getElementById('walletCard');
+                const wasOpen = card.classList.contains('addr-open');
+                toggle.setAttribute('aria-expanded', String(open));
+                toggle.title = open ? 'Show the short address' : 'Show the full address';
+                // Open drops the fixed ratio but keeps the closed height as a floor, so the card only grows
+                if (open && !wasOpen) card.style.minHeight = card.offsetHeight + 'px';
+                if (!open) card.style.minHeight = '';
+                card.classList.toggle('addr-open', open);
+                document.getElementById('cardAddrShort').textContent = open ? address : shortAddress(address);
+            }
+
             function renderIdentity() {
                 const w = window.walletGlobal || wallet;
                 const address = walletAddress.dataset.address || '';
@@ -14519,7 +14550,14 @@ Anyone with your master private key can access all your funds.`;
                     document.getElementById('sendFromMode').textContent =
                         'Nothing is signed here. Sign the exported file on the offline computer, then broadcast it from here.';
                 }
-                document.getElementById('cardAddrShort').textContent = shortAddress(address);
+                const addrToggle = document.getElementById('cardAddrToggle');
+                if (addrToggle.dataset.address !== address) {
+                    // Another wallet starts with its address folded again
+                    addrToggle.dataset.address = address;
+                    setAddressOpen(false);
+                } else {
+                    setAddressOpen(addrToggle.getAttribute('aria-expanded') === 'true');
+                }
                 walletAddressLink.title = address ? `${address} (open in explorer)` : '';
                 walletAddressLink.setAttribute('aria-label', address ? `Open ${address} in the explorer` : 'Open address in explorer');
                 const explorerHref = watching
@@ -14627,6 +14665,9 @@ Anyone with your master private key can access all your funds.`;
             shellObserver.observe(walletAddressLink, { attributes: true, attributeFilter: ['href'] });
             document.querySelectorAll('input[name="vestingMode"]').forEach(radio => radio.addEventListener('change', scheduleShellRender));
             window.addEventListener('storage', scheduleShellRender);
+            document.getElementById('cardAddrToggle').addEventListener('click', e => {
+                setAddressOpen(e.currentTarget.getAttribute('aria-expanded') !== 'true');
+            });
 
             // Node status: the top-bar chip and the Node row
             window.updateNodeStatus = function(state, height) {
@@ -15098,7 +15139,7 @@ Anyone with your master private key can access all your funds.`;
             
             <h3 style="margin-top: 20px; margin-bottom: 15px; color: var(--text);">Receiving Funds</h3>
             <ul style="margin-bottom: 20px;">
-                <li>Your address is displayed on the wallet card</li>
+                <li>Your address is displayed on the wallet card; click the short address to unfold the full one</li>
                 <li>Press "Receive", or the QR code on the card, to show a larger code and the full address</li>
                 <li>Share your address or QR code with the sender</li>
                 <li>When connected, balance updates automatically</li>
