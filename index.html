@@ -10160,6 +10160,9 @@ Anyone with your master private key can access all your funds.`;
                         walletUnconfirmed.textContent = `(${SatoshiMath.satoshisToAlpha(unconfirmedBalance)})`;
                     } else {
                         walletUnconfirmed.style.display = 'none';
+                        // Clear, not just hide: the card reads this text, and a stale amount would keep
+                        // showing "+… unconfirmed" after the transaction confirmed.
+                        walletUnconfirmed.textContent = '';
                     }
                 }
 
@@ -14640,7 +14643,9 @@ Anyone with your master private key can access all your funds.`;
                 available.textContent = `${max.int}.${max.dec}`;
                 payLine.replaceChildren('Paying with ', chip, ' · ', available, ' ALPHA available');
 
-                const pending = splitAlpha(document.getElementById('walletUnconfirmed').textContent);
+                // A hidden pending element means nothing is pending, whatever text it still holds.
+                const pendingSrc = document.getElementById('walletUnconfirmed');
+                const pending = splitAlpha(pendingSrc.style.display === 'none' ? '' : pendingSrc.textContent);
                 const pendingPill = document.getElementById('cardPending');
                 pendingPill.hidden = pending.value === 0;
                 document.getElementById('cardPendingText').textContent =
@@ -14877,7 +14882,8 @@ Anyone with your master private key can access all your funds.`;
             }
 
             const shellObserver = new MutationObserver(scheduleShellRender);
-            [walletInfo, watchOnlySection, shellEls.history].forEach(el => {
+            // walletUnconfirmed too: when the pending amount reaches zero it may only be hidden.
+            [walletInfo, watchOnlySection, shellEls.history, walletUnconfirmed].forEach(el => {
                 shellObserver.observe(el, { attributes: true, attributeFilter: ['style'] });
             });
             ['walletBalance', 'vestedBalance', 'unvestedBalance', 'walletUnconfirmed', 'walletAddress', 'transactionHistoryList'].forEach(id => {
