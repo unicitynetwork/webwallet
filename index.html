@@ -331,6 +331,9 @@
         body:not(.has-wallet) #walletCard, body.has-wallet #emptyCard { display: none; }
         body:not(.has-wallet) .needs-wallet, body.has-wallet .needs-empty { display: none !important; }
         body:not(.has-wallet):not(.watch-only) .needs-wallet-or-watch { display: none !important; }
+        /* A wallet whose signing key does not match its address: explicit error card with Reset, never the address. */
+        body.key-check-failed #emptyCard .empty-default, body:not(.key-check-failed) .kf-only { display: none !important; }
+        .kf-only .btn { margin-top: 12px; }
 
         /* Round actions */
         .actions { display: flex; align-items: flex-start; gap: 48px; margin-top: 24px; }
@@ -1055,9 +1058,14 @@
                                             <span class="n">ALPHA</span>
                                             <span class="l">· Consensus layer</span>
                                         </div>
-                                        <div>
+                                        <div class="empty-default">
                                             <div class="wcard-empty-t">No wallet on this device</div>
                                             <div class="wcard-empty-s">Create one, or bring an existing wallet. Keys are made and kept in this browser and never sent to a server.</div>
+                                        </div>
+                                        <div class="kf-only" id="keyCheckFailedBlock" role="alert">
+                                            <div class="wcard-empty-t">Wallet key check failed</div>
+                                            <div class="wcard-empty-s">This wallet's signing key does not match its address. Do not send funds to it. Restore it from your recovery phrase or backup, or reset it.</div>
+                                            <button type="button" class="btn btn-sm" id="keyCheckResetBtn" onclick="document.getElementById('deleteWalletBtn').click()">Reset this wallet</button>
                                         </div>
                                     </div>
                                 </div>
@@ -2059,6 +2067,12 @@ Anyone with your master private key can access all your funds.`;
                 fulcrumDirectBalanceAddress = null;
                 balanceRetryCount = 0;
             }
+            // The direct balance, but only if it was read for the address now on screen; 0n otherwise.
+            // Every reader goes through this, so a value read for another address is never used.
+            function currentDirectBalance() {
+                const address = getCurrentVestingAddress();
+                return address && fulcrumDirectBalanceAddress === address ? fulcrumDirectBalance : 0n;
+            }
 
             // The address the last coin list and history answers were for. The view shows a
             // loading state until they match the address on screen.
@@ -2419,6 +2433,7 @@ Anyone with your master private key can access all your funds.`;
                         updateButtonStates(false);
                         deleteWalletBtn.disabled = false;
                         walletInfo.style.display = 'none';
+                        clearDisplayedAddress();
                         return;
                     }
 
@@ -2537,11 +2552,15 @@ Anyone with your master private key can access all your funds.`;
                 const ec = new elliptic.ec('secp256k1');
                 const keyPair = ec.keyFromPrivate(randomHex);
                 
-                wallet.masterPrivateKey = randomHex;
-                wallet.addresses = [];
-                wallet.isEncrypted = false;
-                wallet.encryptedMasterKey = '';
-                wallet.childPrivateKey = null; // Will be set when generating first address
+                // A brand-new object: never inherit chain code, descriptor path or the BIP32 flag
+                // from whatever wallet (possibly a failed one) was loaded before.
+                wallet = {
+                    masterPrivateKey: randomHex,
+                    addresses: [],
+                    isEncrypted: false,
+                    encryptedMasterKey: '',
+                    childPrivateKey: null // Will be set when generating first address
+                };
                 
                 // Update global reference
                 window.walletGlobal = wallet;
@@ -3312,6 +3331,15 @@ Anyone with your master private key can access all your funds.`;
                 }
             }
             
+            // Wipe every place a receive address is shown (text, copy data, explorer link, QR), so a
+            // refused wallet can never inherit the previous wallet's address.
+            function clearDisplayedAddress() {
+                if (walletAddress) { walletAddress.textContent = ''; delete walletAddress.dataset.address; }
+                if (walletAddressLink) walletAddressLink.removeAttribute('href');
+                const qr = document.getElementById('walletQrCode');
+                if (qr) qr.innerHTML = '';
+            }
+
             // Add address to UI
             function addAddressToUI(addressInfo) {
                 console.log('addAddressToUI called with:', addressInfo);
@@ -3326,6 +3354,7 @@ Anyone with your master private key can access all your funds.`;
                 if (checkWalletKeyIntegrity(wallet)) {
                     console.error('Refusing to display address: wallet failed its key check');
                     walletInfo.style.display = 'none';
+                    clearDisplayedAddress();
                     return;
                 }
                 
@@ -4866,7 +4895,7 @@ Anyone with your master private key can access all your funds.`;
                 if (totalEl) {
                     // Use Fulcrum's direct balance as authoritative total
                     // Fall back to calculated sum if Fulcrum balance not yet fetched
-                    const displayTotal = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (runningVestedBalance + runningUnvestedBalance);
+                    const displayTotal = currentDirectBalance() > 0n ? currentDirectBalance() : (runningVestedBalance + runningUnvestedBalance);
                     totalEl.textContent = SatoshiMath.satoshisToAlpha(displayTotal) + ' ALPHA';
                 }
 
@@ -4906,7 +4935,7 @@ Anyone with your master private key can access all your funds.`;
                     addressCache.vestingBalances.vested = runningVestedBalance;
                     addressCache.vestingBalances.unvested = runningUnvestedBalance;
                     // Use Fulcrum's direct balance as authoritative total
-                    addressCache.vestingBalances.all = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (runningVestedBalance + runningUnvestedBalance);
+                    addressCache.vestingBalances.all = currentDirectBalance() > 0n ? currentDirectBalance() : (runningVestedBalance + runningUnvestedBalance);
                 }
             }
 
@@ -4936,7 +4965,7 @@ Anyone with your master private key can access all your funds.`;
                 addressCache.vestingBalances = {
                     vested: runningVestedBalance,
                     unvested: runningUnvestedBalance,
-                    all: fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (runningVestedBalance + runningUnvestedBalance)
+                    all: currentDirectBalance() > 0n ? currentDirectBalance() : (runningVestedBalance + runningUnvestedBalance)
                 };
 
                 // Update static display
@@ -5024,7 +5053,11 @@ Anyone with your master private key can access all your funds.`;
                         // processIncomingUtxos to avoid race conditions where get_balance
                         // arrives before listunspent with vesting fields.
 
-                        checkBalanceVerification();
+                        // Redraw now: if listunspent was processed first, the totals were drawn with
+                        // the previous direct balance and would stay stale until the next event.
+                        // (updateVestingBalanceDisplayRealtime ends with checkBalanceVerification.)
+                        if (!watchOnlyMode) updateCommonBalance();
+                        updateVestingBalanceDisplayRealtime();
                     }
                 });
             }
@@ -5034,24 +5067,25 @@ Anyone with your master private key can access all your funds.`;
              */
             function checkBalanceVerification() {
                 const countedBalance = runningVestedBalance + runningUnvestedBalance;
+                const directBalance = currentDirectBalance();
                 const spinner = document.getElementById('balanceVerificationSpinner');
 
                 // Skip verification until Fulcrum direct balance has been fetched.
                 // Without this guard, the async fetchFulcrumDirectBalance hasn't returned yet
-                // and fulcrumDirectBalance is 0n, causing a false "overshoot" retry cascade.
-                if (fulcrumDirectBalance === 0n && countedBalance > 0n) {
+                // and directBalance is 0n, causing a false "overshoot" retry cascade.
+                if (directBalance === 0n && countedBalance > 0n) {
                     console.log('[BalanceVerify] Waiting for Fulcrum direct balance fetch...');
                     return;
                 }
 
-                console.log(`[BalanceVerify] Counted: ${SatoshiMath.satoshisToAlpha(countedBalance)} ALPHA, Fulcrum: ${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA`);
+                console.log(`[BalanceVerify] Counted: ${SatoshiMath.satoshisToAlpha(countedBalance)} ALPHA, Fulcrum: ${SatoshiMath.satoshisToAlpha(directBalance)} ALPHA`);
 
-                if (countedBalance === fulcrumDirectBalance) {
+                if (countedBalance === directBalance) {
                     // Perfect match - hide spinner
                     if (spinner) spinner.style.display = 'none';
                     balanceRetryCount = 0;
                     console.log('[BalanceVerify] Balance verified - perfect match');
-                } else if (countedBalance < fulcrumDirectBalance) {
+                } else if (countedBalance < directBalance) {
                     // Still processing - show spinner
                     if (spinner) spinner.style.display = 'inline';
                     console.log('[BalanceVerify] Still processing UTXOs...');
@@ -5094,13 +5128,14 @@ Anyone with your master private key can access all your funds.`;
              */
             function showBalanceIntegrityWarning() {
                 const countedBalance = runningVestedBalance + runningUnvestedBalance;
+                const directBalance = currentDirectBalance();
                 const spinner = document.getElementById('balanceVerificationSpinner');
                 if (spinner) spinner.style.display = 'none';
 
                 showInAppNotification(
                     'Balance Integrity Warning',
                     `Counted balance (${SatoshiMath.satoshisToAlpha(countedBalance)} ALPHA) ` +
-                    `exceeds Fulcrum balance (${SatoshiMath.satoshisToAlpha(fulcrumDirectBalance)} ALPHA). ` +
+                    `exceeds Fulcrum balance (${SatoshiMath.satoshisToAlpha(directBalance)} ALPHA). ` +
                     `This may indicate a sync issue.`,
                     'warning'
                 );
@@ -8207,9 +8242,17 @@ Anyone with your master private key can access all your funds.`;
                                 console.error('Recovery scan (0-99) failed to find matching key');
                                 console.error('Import aborted to prevent key/address mismatch bug');
 
-                                // Clear the wallet and abort import
-                                wallet = {};
-                                window.walletGlobal = wallet;
+                                // Abort the import and go back to the wallet that was loaded before (its
+                                // display was cleared when the restore started); with none, show nothing.
+                                const previousKey = localStorage.getItem('currentWalletKey');
+                                if (previousKey && localStorage.getItem(previousKey)) {
+                                    loadWalletByKey(previousKey);
+                                } else {
+                                    wallet = {};
+                                    window.walletGlobal = wallet;
+                                    walletInfo.style.display = 'none';
+                                    clearDisplayedAddress();
+                                }
 
                                 // Allow user to try again with a different file
                                 const submitBtn = document.getElementById('restoreModalSubmitBtn');
@@ -8221,22 +8264,28 @@ Anyone with your master private key can access all your funds.`;
                             }
                         }
                         
-                        console.log('About to call addAddressToUI with:', wallet.addresses[0]);
+                        // Stop here if the signing key does not match the address: nothing is shown,
+                        // saved or announced as loaded.
+                        const restoredKeyProblem = checkWalletKeyIntegrity(wallet);
+                        if (restoredKeyProblem) {
+                            restoreStatus.className = 'info-box error';
+                            restoreStatus.textContent = 'This backup failed the key check: ' + restoredKeyProblem + '. Import aborted.';
+                            restoreStatus.style.display = 'block';
+                            const previousKey = localStorage.getItem('currentWalletKey');
+                            if (previousKey && localStorage.getItem(previousKey)) {
+                                loadWalletByKey(previousKey);
+                            } else {
+                                wallet = {};
+                                window.walletGlobal = wallet;
+                                walletInfo.style.display = 'none';
+                                clearDisplayedAddress();
+                                updateButtonStates(false);
+                            }
+                            return;
+                        }
+                        // addAddressToUI shows the wallet section itself - and refuses (keeping it
+                        // hidden) when the signing key does not match the address. Never force it.
                         addAddressToUI(wallet.addresses[0]);
-                        
-                        // Force wallet info section to be visible
-                        const walletInfoSection = document.getElementById('walletInfo');
-                        if (walletInfoSection) {
-                            walletInfoSection.style.display = 'block';
-                            console.log('Forced walletInfo section to be visible');
-                        }
-                        
-                        // Update the wallet address directly as backup
-                        const walletAddressElement = document.getElementById('walletAddress');
-                        if (walletAddressElement && wallet.addresses[0]) {
-                            walletAddressElement.textContent = wallet.addresses[0].address;
-                            console.log('Directly updated wallet address element to:', wallet.addresses[0].address);
-                        }
                     }
                     
                     // Save the restored wallet
@@ -9252,8 +9301,7 @@ Anyone with your master private key can access all your funds.`;
                         electrumSocket = null;
                         electrumConnected = false;
                         serverProvidesVesting = false;
-                        fulcrumDirectBalance = 0n;
-                        balanceRetryCount = 0;
+                        forgetDirectBalance();
                         currentScriptHashSubscription = null;
                         headerSubscriptionActive = false;
                         isInitialLoad = true;  // Reset for next connection
@@ -9378,8 +9426,7 @@ Anyone with your master private key can access all your funds.`;
 
                 electrumConnected = false;
                 serverProvidesVesting = false;
-                fulcrumDirectBalance = 0n;
-                balanceRetryCount = 0;
+                forgetDirectBalance();
                 electrumCallbacks = {};
                 updateUtxoListDisplay(); // Update UTXO list display when disconnected
 
@@ -9760,6 +9807,9 @@ Anyone with your master private key can access all your funds.`;
                     watchOnlyMode = true;
                     // Only clear data when actually switching TO watch-only mode from wallet mode
                     if (!wasInWatchOnlyMode) {
+                        // The coin choice is hidden in watch-only mode: never let a vested/unvested
+                        // choice left over from a wallet silently shape an exported template.
+                        if (vestingMode !== 'all' && window.setVestingMode) window.setVestingMode('all');
                         currentTransactions = [];
                         currentUtxos = [];
                         // Reset pagination
@@ -9923,8 +9973,10 @@ Anyone with your master private key can access all your funds.`;
                             }
                         });
 
-                        // Update display - use Fulcrum's direct balance when available
-                        const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : confirmed;
+                        // Update display - use Fulcrum's direct balance when available; until then the
+                        // total includes unconfirmed coins, like the wallet view (confirmed-only showed 0
+                        // while change from a recent spend was still unconfirmed).
+                        const displayBalance = currentDirectBalance() > 0n ? currentDirectBalance() : (confirmed + unconfirmed);
                         watchOnlyBalance.textContent = SatoshiMath.satoshisToAlpha(displayBalance) + ' ALPHA';
                         if (unconfirmed > 0n) {
                             watchOnlyUnconfirmed.textContent = '(' + SatoshiMath.satoshisToAlpha(unconfirmed) + ')';
@@ -10099,7 +10151,7 @@ Anyone with your master private key can access all your funds.`;
                     // vested/unvested rows. Until Fulcrum's direct balance arrives (it is reset on
                     // every load), confirmed-only would show 0 while change from a recent spend is
                     // still unconfirmed.
-                    const displayBalance = fulcrumDirectBalance > 0n ? fulcrumDirectBalance : (confirmedBalance + unconfirmedBalance);
+                    const displayBalance = currentDirectBalance() > 0n ? currentDirectBalance() : (confirmedBalance + unconfirmedBalance);
                     walletBalance.textContent = `${SatoshiMath.satoshisToAlpha(displayBalance)} ALPHA`;
                 }
                 if (walletUnconfirmed) {
@@ -14503,9 +14555,27 @@ Anyone with your master private key can access all your funds.`;
                 return (typeof vestingMode === 'string' && MODE_NAMES[vestingMode]) ? vestingMode : 'all';
             }
 
+            // Key check of the loaded wallet, memoized on the fields it depends on (renders are frequent).
+            let keyCheckMemo = { sig: null, failed: false };
+            function walletFailsKeyCheck() {
+                if (!wallet || !wallet.masterPrivateKey || !wallet.addresses || wallet.addresses.length === 0) {
+                    keyCheckMemo = { sig: null, failed: false };   // no key material kept after a reset
+                    return false;
+                }
+                const a = wallet.addresses[0] || {};
+                const sig = CryptoJS.SHA256([wallet.masterPrivateKey, wallet.masterChainCode, wallet.childPrivateKey,
+                    wallet.isImportedAlphaWallet ? 'bip32' : 'hmac', a.address, a.publicKey, a.path].join('|')).toString();
+                if (keyCheckMemo.sig !== sig) keyCheckMemo = { sig: sig, failed: !!checkWalletKeyIntegrity(wallet) };
+                return keyCheckMemo.failed;
+            }
+
             function syncState() {
                 const shown = el => !!el && el.style.display !== 'none';
-                const hasWallet = shown(walletInfo);
+                const keyFailed = walletFailsKeyCheck();
+                // Never present a wallet whose signing key does not match its address, whatever
+                // made #walletInfo visible.
+                const hasWallet = shown(walletInfo) && !keyFailed;
+                document.body.classList.toggle('key-check-failed', keyFailed);
                 document.body.classList.toggle('has-wallet', hasWallet);
                 document.body.classList.toggle('watch-only', !hasWallet && shown(watchOnlySection));
                 document.body.classList.toggle('has-history', shown(shellEls.history));
@@ -14639,13 +14709,55 @@ Anyone with your master private key can access all your funds.`;
                 document.getElementById('activePathText').textContent = path ? `Active path ${path}` : 'Single address, no derivation path';
             }
 
+            // Key check of a stored (not loaded) wallet: 'ok', 'unverified' (older wallets saved without
+            // their signing key - repaired when loaded) or 'failed'. Memoized on a hash of the raw JSON.
+            const storedKeyCheckMemo = new Map();
+            function storedWalletKeyState(key) {
+                let raw = null;
+                try { raw = localStorage.getItem(key); } catch (e) { return 'failed'; }
+                if (!raw) return 'failed';
+                const h = CryptoJS.SHA256(raw).toString();
+                const memo = storedKeyCheckMemo.get(key);
+                if (memo && memo.h === h) return memo.state;
+                let state = 'failed';
+                try {
+                    const w = JSON.parse(raw);
+                    if (w && w.addresses && w.addresses.length > 0 && w.masterPrivateKey && !w.childPrivateKey) state = 'unverified';
+                    else state = checkWalletKeyIntegrity(w) ? 'failed' : 'ok';
+                } catch (e) { state = 'failed'; }
+                storedKeyCheckMemo.set(key, { h: h, state: state });
+                return state;
+            }
+
+            // getAllStoredWallets() parses every stored wallet; renders are frequent, so reuse the
+            // result until the set of stored wallets (or any of their contents) changes.
+            let storedWalletsMemo = { sig: null, list: [] };
+            function storedWalletsCached() {
+                const parts = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && (key.startsWith('alphaWallet_') || key === 'alphaWallet')) {
+                        parts.push(key + ':' + (localStorage.getItem(key) || ''));
+                    }
+                }
+                // Content hash, not lengths: switching to another address can keep the length identical.
+                const sig = CryptoJS.SHA256(parts.sort().join('|')).toString();
+                if (storedWalletsMemo.sig !== sig) {
+                    storedWalletsMemo = { sig: sig, list: getAllStoredWallets() };
+                    // forget memo entries of wallets that no longer exist
+                    const live = new Set(storedWalletsMemo.list.map(w => w.key));
+                    [...storedKeyCheckMemo.keys()].forEach(k => { if (!live.has(k)) storedKeyCheckMemo.delete(k); });
+                }
+                return storedWalletsMemo.list;
+            }
+
             function renderStack() {
                 shellEls.stack.querySelectorAll('.back-card').forEach(el => el.remove());
                 let stored = [];
-                try { stored = getAllStoredWallets(); } catch (e) { stored = []; }
+                try { stored = storedWalletsCached(); } catch (e) { stored = []; }
                 const currentKey = localStorage.getItem('currentWalletKey');
-                const hasWallet = document.body.classList.contains('has-wallet');
-                const others = stored.filter(w => !(hasWallet && w.key === currentKey)).slice(0, 3);
+                // The current wallet is the front card (or the error card) - never a back card.
+                const others = stored.filter(w => w.key !== currentKey).slice(0, 3);
 
                 shellEls.stackHint.textContent = stored.length === 0
                     ? 'none on this device yet'
@@ -14662,13 +14774,18 @@ Anyone with your master private key can access all your funds.`;
                     card.dataset.depth = String(depth);
                     card.style.top = `calc(${j} * var(--peek))`;
                     card.style.left = card.style.right = `${depth * 12}px`;
-                    card.setAttribute('aria-label', `Switch to wallet ${stored.identifier}`);
+                    const label = stored.isBIP32 ? 'Alpha Core HD' : 'Wallet';
+                    card.setAttribute('aria-label', `Switch to ${label} ${j + 1}`);
                     const name = document.createElement('span');
                     name.className = 'bc-name';
-                    name.textContent = stored.isBIP32 ? 'Alpha Core HD' : 'Wallet';
+                    name.textContent = label;
                     const addr = document.createElement('span');
                     addr.className = 'bc-addr';
-                    addr.textContent = (stored.isEncrypted ? 'Encrypted · ' : '') + shortAddress(stored.identifier);
+                    // An address is shown only for a stored wallet whose key matches it.
+                    const keyState = storedWalletKeyState(stored.key);
+                    addr.textContent = (stored.isEncrypted ? 'Encrypted · ' : '') +
+                        (keyState === 'ok' ? shortAddress(stored.identifier)
+                            : keyState === 'unverified' ? 'Address not verified' : 'Key check failed');
                     card.append(name, addr);
                     card.addEventListener('click', () => {
                         switchToStoredWallet(stored.key);
@@ -14916,9 +15033,18 @@ Anyone with your master private key can access all your funds.`;
             }
             // Tolerates numbered lists ("1. word"), commas, PDF ligatures and fullwidth letters.
             // Other scripts stay as letters, so a foreign word is flagged instead of vanishing.
+            // Split pasted/typed text into words. Only separators split (whitespace, commas,
+            // semicolons) and only leading numbering is stripped ("1.", "01)", "(3)", a bare "1").
+            // A token with any other non-letter (e.g. a typo "ab0ut") stays ONE word - shown as
+            // invalid - so it can never shift the following words into the wrong boxes.
             function phraseWords(text) {
-                return String(text || '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-                    .split(/[^\p{L}]+/u).filter(Boolean);
+                return String(text || '').normalize('NFKD').replace(/\p{M}/gu, '').replace(/\p{Cf}/gu, '')
+                    .toLowerCase()
+                    .split(/[\s,;|]+/u)
+                    // Trim numbering, bullets, quotes and punctuation at both ends; a non-letter inside
+                    // a word (e.g. "ab0ut") stays, so the word is shown as invalid instead of split.
+                    .map(token => token.replace(/^[^\p{L}]+/u, '').replace(/[^\p{L}]+$/u, ''))
+                    .filter(Boolean);
             }
             function setPhraseSize(size) {
                 const grid = document.getElementById('phraseGrid');
@@ -14970,6 +15096,18 @@ Anyone with your master private key can access all your funds.`;
             function fillPhrase(start, words) {
                 start = Math.max(0, start);
                 const current = phraseInputs();
+                // Never truncate: dropping words would shift or lose part of the phrase.
+                const refuse = (message) => {
+                    const status = document.getElementById('phraseStatus');
+                    if (status) { status.textContent = message; status.dataset.tone = 'bad'; }
+                    // Nothing stale may be submitted (e.g. by Enter) while the grid shows a refusal.
+                    const mirror = document.getElementById('restoreMnemonicInput');
+                    if (mirror) mirror.value = '';
+                    return false;
+                };
+                if (words.length > 24) {
+                    return refuse(`That text has ${words.length} words. A recovery phrase has 12 or 24 - nothing was filled in.`);
+                }
                 // The rest of a phrase already begun, such as its second half pasted into box 13
                 const continues = start > 0 && start + words.length <= current.length
                     && current.slice(0, start).every(input => input.value.trim());
@@ -14984,12 +15122,16 @@ Anyone with your master private key can access all your funds.`;
                     });
                 }
                 const inputs = phraseInputs();
-                words.slice(0, inputs.length - start).forEach((word, i) => {
+                if (start + words.length > inputs.length) {
+                    return refuse(`Those ${words.length} words do not fit from box ${start + 1}. Paste the whole phrase into box 1 - nothing was filled in.`);
+                }
+                words.forEach((word, i) => {
                     inputs[start + i].value = word;
                     inputs[start + i].dataset.touched = '1';
                 });
                 (inputs.find(input => !input.value) || inputs[inputs.length - 1]).focus();
                 renderPhrase();
+                return true;
             }
             function clearRecoveryWords() {
                 document.querySelectorAll('#phraseGrid input').forEach(input => {
@@ -15036,7 +15178,8 @@ Anyone with your master private key can access all your funds.`;
                 const index = phraseInputs().indexOf(input);
                 const words = phraseWords(input.value);
                 if (words.length > 1) {
-                    fillPhrase(index, words);
+                    // On a refusal keep only the first word in this box; the status explains why.
+                    if (fillPhrase(index, words) === false) input.value = words[0] || '';
                     return true;
                 }
                 input.value = words[0] || '';
