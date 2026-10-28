@@ -494,6 +494,47 @@
         .activity-empty .t { font-size: 14px; font-weight: 600; }
         .activity-empty .s { font-size: 13px; color: var(--text-3); max-width: 420px; }
         body.has-history .activity-empty, body:not(.has-history) .tx-cols { display: none; }
+
+        /* Loading: a soft shimmer where numbers and rows will appear, until the node answers */
+        @keyframes ec-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+        .sk,
+        body.balance-loading .wcard-bal .int,
+        body.balance-loading .seg-amt,
+        body.balance-loading .cp-a,
+        body.balance-loading .send-from .s strong,
+        body.balance-loading #legendVested, body.balance-loading #legendUnvested,
+        .tx-amt-loading {
+            border-radius: 6px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.05) 30%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.05) 70%);
+            background-size: 200% 100%;
+            animation: ec-shimmer 1.4s linear infinite;
+        }
+        body.balance-loading .wcard-bal .int, body.balance-loading .wcard-bal .dec,
+        body.balance-loading .seg-amt, body.balance-loading .seg-amt .dec,
+        body.balance-loading .cp-a, body.balance-loading .cp-a .dec,
+        body.balance-loading .send-from .s strong,
+        body.balance-loading #legendVested, body.balance-loading #legendUnvested,
+        .tx-amt-loading, .tx-amt-loading .dec, .tx-amt-loading .unit { color: transparent; }
+        body.balance-loading .share-bar span { opacity: 0; }
+        .tx-skeleton { display: none; border-top: 1px solid var(--line); }
+        body.history-loading:not(.has-history) .tx-skeleton { display: block; }
+        body.history-loading:not(.has-history) .activity-empty { display: none; }
+        .tx-skel { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 24px; border-bottom: 1px solid var(--line-1); }
+        .tx-skel:last-child { border-bottom: 0; }
+        .tx-skel .sk-ico { flex: none; width: 36px; height: 36px; border-radius: 999px; }
+        .tx-skel .sk-lines { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        .tx-skel .sk-t { width: 96px; height: 12px; }
+        .tx-skel .sk-s { width: 168px; height: 10px; }
+        .tx-skel .sk-amt { margin-left: auto; width: 112px; height: 14px; }
+        .tx-skel:nth-child(2) .sk-s { width: 132px; }
+        .tx-skel:nth-child(2) .sk-amt { width: 88px; }
+        .tx-skel:nth-child(3) .sk-t { width: 72px; }
+        .tx-skel:nth-child(3) .sk-amt { width: 124px; }
+        @media (prefers-reduced-motion: reduce) {
+            .sk, body.balance-loading .wcard-bal .int, body.balance-loading .seg-amt, body.balance-loading .cp-a,
+            body.balance-loading .send-from .s strong, body.balance-loading #legendVested,
+            body.balance-loading #legendUnvested, .tx-amt-loading { animation: none; }
+        }
         body:not(.has-wallet):not(.watch-only) #activitySection { display: none; }
         #broadcastQueueStatus { padding: 16px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); font-size: 13px; color: var(--text-2); }
         #broadcastQueueStatus h4, #broadcastQueueStatus strong { color: var(--text); }
@@ -1238,6 +1279,13 @@
                         <div id="transactionHistoryContainer" style="display: none;">
                             <h4>Transaction History</h4>
                             <div id="transactionHistoryList"></div>
+                        </div>
+                        <!-- Placeholder rows while the node sends this address's history -->
+                        <div class="tx-skeleton" role="status">
+                            <span class="sr-only">Loading history</span>
+                            <div class="tx-skel" aria-hidden="true"><span class="sk sk-ico"></span><span class="sk-lines"><span class="sk sk-t"></span><span class="sk sk-s"></span></span><span class="sk sk-amt"></span></div>
+                            <div class="tx-skel" aria-hidden="true"><span class="sk sk-ico"></span><span class="sk-lines"><span class="sk sk-t"></span><span class="sk sk-s"></span></span><span class="sk sk-amt"></span></div>
+                            <div class="tx-skel" aria-hidden="true"><span class="sk sk-ico"></span><span class="sk-lines"><span class="sk sk-t"></span><span class="sk sk-s"></span></span><span class="sk sk-amt"></span></div>
                         </div>
                         <div class="activity-empty">
                             <span class="t" id="activityEmptyTitle">No activity yet</span>
@@ -2011,6 +2059,11 @@ Anyone with your master private key can access all your funds.`;
                 fulcrumDirectBalanceAddress = null;
                 balanceRetryCount = 0;
             }
+
+            // The address the last coin list and history answers were for. The view shows a
+            // loading state until they match the address on screen.
+            let utxosLoadedFor = null;
+            let historyLoadedFor = null;
 
             // Server-side vesting: true when connected Fulcrum provides vesting fields
             let serverProvidesVesting = false;
@@ -9848,6 +9901,7 @@ Anyone with your master private key can access all your funds.`;
                 // Fetch UTXOs
                 electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                     if (result !== null && result !== undefined) {
+                        utxosLoadedFor = address;
                         const newUtxos = result.map(utxo => ({
                             ...utxo,
                             address: address
@@ -9891,6 +9945,7 @@ Anyone with your master private key can access all your funds.`;
                 // Also fetch transaction history
                 electrumRequest('blockchain.scripthash.get_history', [scriptHash], function(result) {
                     if (result !== null && result !== undefined) {
+                        historyLoadedFor = address;
                         // Transaction history fetched successfully
                         // Analyze changes
                         const changes = analyzeTransactionChanges(currentTransactions, result);
@@ -12384,10 +12439,12 @@ Anyone with your master private key can access all your funds.`;
                 // Also fetch and store current transactions for export
                 if (wallet.addresses && wallet.addresses.length > 0) {
                     const scriptHash = addressToScriptHash(wallet.addresses[0].address);
+                    const requestedAddress = wallet.addresses[0].address;
                     if (scriptHash) {
                         // Store transactions
                         electrumRequest('blockchain.scripthash.get_history', [scriptHash], function(result) {
                             if (result) {
+                                historyLoadedFor = requestedAddress;
                                 // Regular wallet transaction history fetched successfully
                                 // Analyze changes
                                 const changes = analyzeTransactionChanges(currentTransactions, result);
@@ -12468,6 +12525,7 @@ Anyone with your master private key can access all your funds.`;
                         // Store UTXOs
                         electrumRequest('blockchain.scripthash.listunspent', [scriptHash], function(result) {
                             if (result) {
+                                utxosLoadedFor = requestedAddress;
                                 const currentAddress = wallet.addresses[0].address;
                                 const newUtxos = result.map(utxo => ({
                                     ...utxo,
@@ -14638,11 +14696,57 @@ Anyone with your master private key can access all your funds.`;
                 }
             }
 
+            // Loading: amounts shimmer and the history shows placeholder rows until the node has
+            // answered for the address on screen. Offline there is nothing to wait for, and after
+            // LOADING_GIVE_UP_MS a missing answer stops the shimmer instead of leaving it on.
+            const LOADING_GIVE_UP_MS = 20000;
+            const LOADING_MIN_VISIBLE_MS = 350;
+            const loadingSince = {};
+            function isWaiting(kind, loadedFor, address, online) {
+                const since = loadingSince[kind];
+                if (!online || !address) {
+                    delete loadingSince[kind];
+                    return false;
+                }
+                if (loadedFor === address) {
+                    // Once shown, the shimmer stays a moment so a fast answer does not flicker
+                    const left = since && since.address === address ? LOADING_MIN_VISIBLE_MS - (Date.now() - since.at) : 0;
+                    if (left > 0) {
+                        setTimeout(scheduleShellRender, left + 10);
+                        return true;
+                    }
+                    delete loadingSince[kind];
+                    return false;
+                }
+                if (!since || since.address !== address) {
+                    loadingSince[kind] = { address, at: Date.now() };
+                    setTimeout(scheduleShellRender, LOADING_GIVE_UP_MS + 50);
+                }
+                return Date.now() - loadingSince[kind].at < LOADING_GIVE_UP_MS;
+            }
+            // Right after load the wallet auto-connects to the default node (tryAutoConnect waits
+            // about 1.5s); until that first attempt the balance is on its way too, not zero.
+            const shellStartedAt = Date.now();
+            const AUTO_CONNECT_GRACE_MS = 4000;
+            let nodeAttempted = false;
+            function renderLoading() {
+                const node = document.getElementById('app').dataset.node;
+                const sinceStart = Date.now() - shellStartedAt;
+                const autoConnectPending = !nodeAttempted && sinceStart < AUTO_CONNECT_GRACE_MS &&
+                    document.getElementById('rpcServer').value.trim() === 'wss://fulcrum.unicity.network:50004';
+                if (autoConnectPending) setTimeout(scheduleShellRender, AUTO_CONNECT_GRACE_MS - sinceStart + 20);
+                const online = autoConnectPending || node === 'connected' || node === 'connecting' || node === 'reconnecting';
+                const address = getCurrentVestingAddress();
+                document.body.classList.toggle('balance-loading', isWaiting('balance', utxosLoadedFor, address, online));
+                document.body.classList.toggle('history-loading', isWaiting('history', historyLoadedFor, address, online));
+            }
+
             let shellFrame = null;
             function renderShell() {
                 shellFrame = null;
                 try {
                     syncState();
+                    renderLoading();
                     renderBalances();
                     renderIdentity();
                     renderStack();
@@ -14674,6 +14778,7 @@ Anyone with your master private key can access all your funds.`;
                 const labels = { connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', disconnected: 'Offline' };
                 const key = labels[state] ? state : 'disconnected';
                 const block = height ? Number(height).toLocaleString('en-US') : null;
+                if (key !== 'disconnected') nodeAttempted = true;
                 document.getElementById('app').dataset.node = key;
                 document.getElementById('nodeChipLabel').textContent = labels[key];
                 document.getElementById('nodeChipMeta').textContent =
