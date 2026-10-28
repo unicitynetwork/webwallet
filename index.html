@@ -349,22 +349,23 @@
 
         /* Balance breakdown: what the balance is made of. It only informs; Pay with in the send sheet picks the coins. */
         #walletInfo { min-width: 0; }
-        .meter { display: flex; gap: 6px; margin-top: 16px; }
-        .seg { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-width: 0; min-height: 72px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); color: var(--text); }
-        .seg-all { flex: 0 0 168px; }
-        .seg-split { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; }
-        .seg-vested { flex: var(--w-vested, 50) 1 0px; border-radius: var(--r) 4px 4px var(--r); border-color: var(--line-2); background: var(--hatch), var(--raised); }
-        .seg-unvested { flex: var(--w-unvested, 50) 1 0px; border-radius: 4px var(--r) var(--r) 4px; }
-        .seg-label { display: flex; align-items: center; gap: 6px; width: 100%; font-size: 13px; line-height: 18px; font-weight: 600; color: inherit; white-space: nowrap; }
-        .seg-label svg { width: 14px; height: 14px; }
+        /* Three equal cards hold the numbers; the share bar under them holds the proportion,
+           so a small share never squeezes its own text */
+        .meter { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 16px; }
+        .seg { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); color: var(--text); }
+        .seg-label { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: inherit; white-space: nowrap; }
         .seg-amt { font-size: 15px; line-height: 20px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .seg-amt .dec { color: var(--text-3); }
         .seg-all .seg-amt { font-weight: 600; }
+        /* Long balances step all three amounts down together instead of cutting digits */
+        .meter[data-size="long"] .seg-amt { font-size: 13px; }
+        .meter[data-size="xlong"] .seg-amt { font-size: 12px; }
+        .seg-note { font-size: 12px; line-height: 16px; color: var(--text-3); }
+        .share-bar { display: flex; height: 6px; margin-top: 12px; border-radius: 999px; overflow: hidden; background: var(--hover); }
+        .share-bar span { height: 100%; flex: none; }
+        .share-vested { background: repeating-linear-gradient(135deg, rgba(255,255,255,0.70) 0 1.5px, rgba(255,255,255,0.30) 1.5px 4px); }
+        .share-unvested { background: var(--warm); }
         .vesting-src { display: none; }
-        .meter-legend { display: flex; gap: 6px; margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-3); }
-        .meter-legend > span:first-child { flex: 0 0 168px; padding-left: 2px; }
-        .meter-legend .split { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; }
-        .meter-legend .split span { min-width: 0; padding-left: 2px; }
         .classify { display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 16px; color: var(--text-3); white-space: nowrap; }
 
         /* Status panel */
@@ -695,9 +696,12 @@
             .acts .menu-wrap > .act { width: 100%; }
             /* More is the right-hand column on a phone, so its menu grows leftwards */
             .acts .menu { left: auto; right: 0; }
-            .meter { flex-direction: column; }
-            .seg-all { flex: none; }
-            .meter-legend { display: none; }
+            /* On a phone each kind is a row: name and amount on one line, the note across the full width */
+            .meter { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+            .seg { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 2px; align-items: baseline; padding: 10px 12px; }
+            .seg-label { grid-column: 1; grid-row: 1; }
+            .seg-amt { grid-column: 2; grid-row: 1; text-align: right; }
+            .seg-note { grid-column: 1 / -1; grid-row: 2; }
             .srow { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
             .srow-actions { justify-self: start; }
             .activity { margin-top: 32px; }
@@ -1067,32 +1071,28 @@
                                     </div>
                                     <div id="vestingBalanceSection" class="meter" role="group" aria-label="Balance by coin type">
                                         <div class="seg seg-all">
-                                            <span class="seg-label">All</span>
+                                            <span class="seg-label"><span class="cp-sw sw-all" aria-hidden="true"></span>All</span>
                                             <span class="seg-amt" id="segAll">0<span class="dec">.00000000</span></span>
+                                            <span class="seg-note">100% · all coins<br>Vested and unvested</span>
                                             <span class="vesting-src"><span id="walletBalance">0 ALPHA</span><span id="walletUnconfirmed"></span></span>
                                         </div>
-                                        <div class="seg-split">
-                                            <div class="seg seg-vested">
-                                                <span class="seg-label">
-                                                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                                                    Vested
-                                                </span>
-                                                <span class="seg-amt" id="segVested">0<span class="dec">.00000000</span></span>
-                                                <span class="vesting-src"><span id="vestedBalance">0 ALPHA</span><span id="vestedUnconfirmed"></span></span>
-                                            </div>
-                                            <div class="seg seg-unvested">
-                                                <span class="seg-label">Unvested</span>
-                                                <span class="seg-amt" id="segUnvested">0<span class="dec">.00000000</span></span>
-                                                <span class="vesting-src"><span id="unvestedBalance">0 ALPHA</span><span id="unvestedUnconfirmed"></span></span>
-                                            </div>
+                                        <div class="seg seg-vested">
+                                            <span class="seg-label"><span class="cp-sw sw-vested" aria-hidden="true"></span>Vested</span>
+                                            <span class="seg-amt" id="segVested">0<span class="dec">.00000000</span></span>
+                                            <span class="seg-note"><span id="legendVested">0%</span> · locked after TGE<br>Mined up to block 280,000</span>
+                                            <span class="vesting-src"><span id="vestedBalance">0 ALPHA</span><span id="vestedUnconfirmed"></span></span>
+                                        </div>
+                                        <div class="seg seg-unvested">
+                                            <span class="seg-label"><span class="cp-sw sw-unvested" aria-hidden="true"></span>Unvested</span>
+                                            <span class="seg-amt" id="segUnvested">0<span class="dec">.00000000</span></span>
+                                            <span class="seg-note"><span id="legendUnvested">0%</span> · not locked<br>Mined after block 280,000</span>
+                                            <span class="vesting-src"><span id="unvestedBalance">0 ALPHA</span><span id="unvestedUnconfirmed"></span></span>
                                         </div>
                                     </div>
-                                    <div class="meter-legend">
-                                        <span>100% · all coins<br>Vested and unvested</span>
-                                        <div class="split">
-                                            <span style="flex: var(--w-vested, 50) 1 0px;"><span id="legendVested">0%</span> · locked after TGE<br>Mined up to block 280,000</span>
-                                            <span style="flex: var(--w-unvested, 50) 1 0px;"><span id="legendUnvested">0%</span> · not locked<br>Mined after block 280,000</span>
-                                        </div>
+                                    <!-- Exact vested / unvested proportion, no clamping -->
+                                    <div class="share-bar" id="shareBar" role="img" aria-label="Vested 0%, unvested 0%">
+                                        <span class="share-vested" id="shareVested" style="width: 0%;"></span>
+                                        <span class="share-unvested" id="shareUnvested" style="width: 0%;"></span>
                                     </div>
                                 </section>
                             </div>
@@ -14434,16 +14434,28 @@ Anyone with your master private key can access all your funds.`;
                 setAmount(document.getElementById('segVested'), vestedText);
                 setAmount(document.getElementById('segUnvested'), unvestedText);
 
-                // Segment widths follow the real split, clamped so a tiny share stays clickable.
+                const longest = Math.max(...[allText, vestedText, unvestedText].map(t => {
+                    const a = splitAlpha(t);
+                    return a.int.length + 1 + a.dec.length;
+                }));
+                document.getElementById('vestingBalanceSection').dataset.size = longest > 16 ? 'xlong' : longest > 14 ? 'long' : '';
+                [['segAll', allText], ['segVested', vestedText], ['segUnvested', unvestedText]].forEach(([id, text]) => {
+                    const a = splitAlpha(text);
+                    document.getElementById(id).title = `${a.int}.${a.dec} ALPHA`;
+                });
+
+                // The share bar carries the exact split; the cards stay equal so no text is squeezed
                 const vested = splitAlpha(vestedText).value;
                 const unvested = splitAlpha(unvestedText).value;
                 const total = vested + unvested;
-                const share = total > 0 ? (vested / total) * 100 : 50;
-                const shown = Math.min(78, Math.max(22, share));
-                walletInfo.style.setProperty('--w-vested', shown.toFixed(1));
-                walletInfo.style.setProperty('--w-unvested', (100 - shown).toFixed(1));
-                document.getElementById('legendVested').textContent = total > 0 ? share.toFixed(1) + '%' : '0%';
-                document.getElementById('legendUnvested').textContent = total > 0 ? (100 - share).toFixed(1) + '%' : '0%';
+                const vestedShare = total > 0 ? (vested / total) * 100 : 0;
+                const unvestedShare = total > 0 ? 100 - vestedShare : 0;
+                document.getElementById('shareVested').style.width = vestedShare + '%';
+                document.getElementById('shareUnvested').style.width = unvestedShare + '%';
+                document.getElementById('legendVested').textContent = vestedShare.toFixed(1) + '%';
+                document.getElementById('legendUnvested').textContent = unvestedShare.toFixed(1) + '%';
+                document.getElementById('shareBar').setAttribute('aria-label',
+                    `Vested ${vestedShare.toFixed(1)}%, unvested ${unvestedShare.toFixed(1)}%`);
 
                 // Pay with in the send sheet holds the wallet's vestingMode radios
                 const mode = currentMode();
