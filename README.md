@@ -50,11 +50,12 @@ The Unicity WEB GUI Wallet is designed to be the primary interface for interacti
    - For maximum security, save the file and use it on an offline computer
 
 2. **Create a New Wallet**:
-   - Click "Create Wallet" to generate a new master key
+   - Choose "Create a new wallet" on the start screen to generate a new master key
    - The wallet uses secure random generation for maximum entropy
+   - To bring an existing wallet instead, choose "Open a backup file" (.txt backup, Alpha Core wallet.dat or Sphere .json export) or "Type a recovery phrase" (the 12 or 24 words from Sphere)
 
 3. **Secure Your Wallet**:
-   - Click "Encrypt Wallet" to add password protection
+   - Press "Backup" and set a password to save an encrypted copy
    - Use a strong, unique password
    - Backup your wallet data immediately
 
