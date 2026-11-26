@@ -12652,12 +12652,13 @@ Anyone with your master private key can access all your funds.`;
                     return;
                 }
 
-                // Calculate total available using BigInt for precision
-                const totalAvailable = SatoshiMath.sum(availableUtxos.map(u => u.value));
-
-                // Calculate fees - we need one transaction per UTXO in Alpha
+                // One transaction per UTXO in Alpha. Count only coins the send planner will
+                // use (collectUtxosForAmount): a coin must pay its fee and still send a
+                // non-dust amount, or Max would offer more than the planner can send.
                 const feePerTx = SatoshiMath.FEE_PER_TX;
-                const totalFees = BigInt(availableUtxos.length) * feePerTx;
+                const usableUtxos = availableUtxos.filter(u => BigInt(u.value) >= feePerTx + SatoshiMath.DUST_THRESHOLD);
+                const totalAvailable = SatoshiMath.sum(usableUtxos.map(u => u.value));
+                const totalFees = BigInt(usableUtxos.length) * feePerTx;
 
                 // Calculate maximum sendable amount
                 const maxSendable = totalAvailable - totalFees;
@@ -12868,185 +12869,90 @@ Anyone with your master private key can access all your funds.`;
                 }
             };
             
-            // Collect UTXOs for required amount
+            // Plan the transactions for a send. Alpha allows exactly one input per transaction,
+            // so every coin spent is its own transaction. The plan keeps that number small:
+            // one coin covers the whole send when any does (the smallest such coin, so large
+            // coins stay whole); otherwise coins are used largest first. Every planned
+            // transaction balances exactly (input = outputs + fee) and has no dust output.
             function collectUtxosForAmount(utxoList, amountSatoshis, recipientAddress, senderAddress) {
-                // Sort UTXOs by value (ascending) to minimize number of transactions
-                const sortedUtxos = [...utxoList].sort((a, b) => a.value - b.value);
+                const FEE = SatoshiMath.FEE_PER_TX;
+                const DUST = SatoshiMath.DUST_THRESHOLD;
+                const amount = BigInt(amountSatoshis);
+                if (amount < DUST) {
+                    return { success: false, error: `Amount is below the dust limit of ${DUST} satoshis.` };
+                }
 
-                // Calculate total available using BigInt for precision
-                const totalAvailable = SatoshiMath.sum(sortedUtxos.map(u => u.value));
-                const amountBI = BigInt(amountSatoshis);
-
-                if (totalAvailable < amountBI) {
+                // A coin only helps if it can pay its own fee and still send a non-dust amount.
+                const usable = utxoList.filter(u => BigInt(u.value) >= FEE + DUST);
+                const totalAvailable = SatoshiMath.sum(usable.map(u => u.value));
+                const maxSendable = totalAvailable - FEE * BigInt(usable.length);
+                if (usable.length === 0 || maxSendable < amount) {
                     return {
                         success: false,
-                        error: `Insufficient funds. Available: ${SatoshiMath.satoshisToAlpha(totalAvailable)} ALPHA, Required: ${SatoshiMath.satoshisToAlpha(amountBI)} ALPHA`
+                        error: `Insufficient funds. Available after fees: ${SatoshiMath.satoshisToAlpha(maxSendable > 0n ? maxSendable : 0n)} ALPHA, Required: ${SatoshiMath.satoshisToAlpha(amount)} ALPHA`
                     };
                 }
 
-                const transactions = [];
-                let remainingAmount = amountBI;
-                const feePerTx = SatoshiMath.FEE_PER_TX;
+                const single = usable
+                    .filter(u => BigInt(u.value) >= amount + FEE)
+                    .sort((a, b) => (BigInt(a.value) < BigInt(b.value) ? -1 : BigInt(a.value) > BigInt(b.value) ? 1 : 0))[0];
+                const chosen = [];   // { utxo, send }
+                if (single) {
+                    chosen.push({ utxo: single, send: amount });
+                } else {
+                    const byValueDesc = [...usable].sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : BigInt(b.value) < BigInt(a.value) ? -1 : 0));
+                    let remaining = amount;
+                    for (const utxo of byValueDesc) {
+                        if (remaining <= 0n) break;
+                        const full = BigInt(utxo.value) - FEE;
+                        const send = full < remaining ? full : remaining;
+                        chosen.push({ utxo, send });
+                        remaining -= send;
+                    }
+                    // A last transaction carrying less than the dust limit would be rejected:
+                    // move the shortfall from the previous transaction, which then keeps
+                    // the moved amount as change (or as fee if that change is itself dust).
+                    const last = chosen[chosen.length - 1];
+                    if (chosen.length > 1 && last.send < DUST) {
+                        const shift = DUST - last.send;
+                        chosen[chosen.length - 2].send -= shift;
+                        last.send = DUST;
+                    }
+                }
 
-                // Since Alpha requires one input per transaction, we need to create multiple transactions
-                for (const utxo of sortedUtxos) {
-                    if (remainingAmount <= 0n) break;
-
-                    const utxoValue = BigInt(utxo.value);
-                    let txAmount;
-                    let changeAmount = 0n;
-
-                    if (utxoValue >= remainingAmount + feePerTx) {
-                        // This UTXO covers the remaining amount plus fee
-                        txAmount = remainingAmount;
-                        changeAmount = utxoValue - remainingAmount - feePerTx;
-                        remainingAmount = 0n;
+                const transactions = chosen.map(({ utxo, send }) => {
+                    const input = BigInt(utxo.value);
+                    let change = input - send - FEE;
+                    const outputs = [{ address: recipientAddress, value: Number(send) }];
+                    if (change >= DUST) {
+                        outputs.push({ address: senderAddress, value: Number(change) });
                     } else {
-                        // Use entire UTXO minus fee
-                        txAmount = utxoValue - feePerTx;
-                        remainingAmount -= txAmount;
-
-                        if (txAmount <= 0n) {
-                            // UTXO too small to cover fee
-                            continue;
-                        }
+                        change = 0n;   // dust change is left to the fee
                     }
-
-                    transactions.push({
-                        input: utxo,
-                        outputs: [
-                            { address: recipientAddress, value: Number(txAmount) }  // Convert for compatibility
-                        ],
-                        fee: Number(feePerTx),
-                        changeAmount: Number(changeAmount),
-                        changeAddress: senderAddress // Send change back to sender address
-                    });
-
-                    // Add change output if needed (but avoid dust outputs)
-                    // Dust threshold: 546 satoshis is typical for P2WPKH
-                    const DUST_THRESHOLD = SatoshiMath.DUST_THRESHOLD;
-                    if (changeAmount > DUST_THRESHOLD) {
-                        transactions[transactions.length - 1].outputs.push({
-                            address: senderAddress,
-                            value: Number(changeAmount)  // Convert for compatibility
-                        });
-                    } else if (changeAmount > 0n) {
-                        // If change is dust, add it to the fee instead
-                        console.log(`Change amount ${changeAmount} is below dust threshold, adding to fee`);
-                    }
-                }
-
-                if (remainingAmount > 0n) {
                     return {
-                        success: false,
-                        error: `Unable to collect enough UTXOs. Short by ${SatoshiMath.satoshisToAlpha(remainingAmount)} ALPHA after fees.`
+                        input: utxo,
+                        outputs,
+                        fee: Number(input - send - change),
+                        changeAmount: Number(change),
+                        changeAddress: senderAddress
                     };
-                }
-                
-                // Apply dust rebalancing
-                const rebalancedTransactions = rebalanceDustOutputs(transactions, recipientAddress, senderAddress, sortedUtxos, feePerTx);
-                
-                return {
-                    success: true,
-                    transactions: rebalancedTransactions
-                };
-            }
-            
-            // Rebalance transactions to avoid dust outputs
-            function rebalanceDustOutputs(transactions, recipientAddress, senderAddress, availableUtxos, feePerTx) {
-                const DUST_THRESHOLD = 546;
-                
-                // First pass: rebalance recipient dust outputs across transactions
-                for (let i = 0; i < transactions.length; i++) {
-                    const tx = transactions[i];
-                    const recipientOutput = tx.outputs.find(o => o.address === recipientAddress);
-                    
-                    if (recipientOutput && recipientOutput.value < DUST_THRESHOLD && transactions.length > 1) {
-                        // Find another transaction to rebalance with
-                        for (let j = 0; j < transactions.length; j++) {
-                            if (i === j) continue;
-                            
-                            const otherTx = transactions[j];
-                            const otherRecipientOutput = otherTx.outputs.find(o => o.address === recipientAddress);
-                            
-                            if (otherRecipientOutput) {
-                                // Calculate how much we need to move to make both outputs non-dust
-                                const totalAmount = recipientOutput.value + otherRecipientOutput.value;
-                                const halfAmount = Math.floor(totalAmount / 2);
-                                
-                                if (halfAmount > DUST_THRESHOLD) {
-                                    // Rebalance the outputs
-                                    recipientOutput.value = halfAmount;
-                                    otherRecipientOutput.value = totalAmount - halfAmount;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Second pass: handle dust change outputs
-                const finalTransactions = [];
-                const usedUtxos = new Set(transactions.map(tx => `${tx.input.txid}:${tx.input.vout}`));
-                
+                });
+
+                // Never hand a plan to signing unless every transaction balances and the
+                // recipient receives exactly the requested amount.
+                let delivered = 0n;
                 for (const tx of transactions) {
-                    finalTransactions.push(tx);
-                    
-                    // Check if we have dust change that needs to be handled
-                    if (tx.changeAmount > 0 && tx.changeAmount <= DUST_THRESHOLD) {
-                        const recipientOutput = tx.outputs.find(o => o.address === recipientAddress);
-                        
-                        if (recipientOutput && recipientOutput.value > DUST_THRESHOLD * 2) {
-                            // Split the recipient output to create non-dust change
-                            const halfRecipientAmount = Math.floor(recipientOutput.value / 2);
-                            recipientOutput.value = halfRecipientAmount;
-                            
-                            // Create proper change output
-                            const newChangeAmount = tx.input.value - halfRecipientAmount - tx.fee;
-                            if (newChangeAmount > DUST_THRESHOLD) {
-                                tx.outputs.push({
-                                    address: senderAddress,
-                                    value: newChangeAmount
-                                });
-                                tx.changeAmount = newChangeAmount;
-                                
-                                // Now we need to create a follow-up transaction for the remaining recipient amount
-                                // Find an unused UTXO
-                                const nextUtxo = availableUtxos.find(utxo => 
-                                    !usedUtxos.has(`${utxo.txid}:${utxo.vout}`)
-                                );
-                                
-                                if (nextUtxo) {
-                                    // Create follow-up transaction
-                                    const remainingRecipientAmount = recipientOutput.value;
-                                    const followUpTx = {
-                                        input: nextUtxo,
-                                        outputs: [
-                                            { address: recipientAddress, value: remainingRecipientAmount }
-                                        ],
-                                        fee: feePerTx,
-                                        changeAmount: nextUtxo.value - remainingRecipientAmount - feePerTx,
-                                        changeAddress: senderAddress
-                                    };
-                                    
-                                    // Add change output if non-dust
-                                    if (followUpTx.changeAmount > DUST_THRESHOLD) {
-                                        followUpTx.outputs.push({
-                                            address: senderAddress,
-                                            value: followUpTx.changeAmount
-                                        });
-                                    }
-                                    
-                                    finalTransactions.push(followUpTx);
-                                    usedUtxos.add(`${nextUtxo.txid}:${nextUtxo.vout}`);
-                                    console.log(`Created follow-up transaction to handle dust change rebalancing`);
-                                }
-                            }
-                        }
+                    const outTotal = SatoshiMath.sum(tx.outputs.map(o => o.value));
+                    if (BigInt(tx.input.value) !== outTotal + BigInt(tx.fee) || BigInt(tx.fee) < FEE ||
+                        tx.outputs.some(o => BigInt(o.value) < DUST)) {
+                        return { success: false, error: 'Internal error: transaction plan does not balance. Nothing was sent.' };
                     }
+                    delivered += SatoshiMath.sum(tx.outputs.filter(o => o.address === recipientAddress).map(o => o.value));
                 }
-                
-                return finalTransactions;
+                if (delivered !== amount) {
+                    return { success: false, error: 'Internal error: transaction plan amount mismatch. Nothing was sent.' };
+                }
+                return { success: true, transactions };
             }
             
             // Show transaction confirmation modal
