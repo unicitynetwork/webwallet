@@ -12675,7 +12675,7 @@ Anyone with your master private key can access all your funds.`;
                 // Show notification with vesting mode info
                 const feesAlphaStr = SatoshiMath.satoshisToAlpha(totalFees);
                 const modeText = vestingMode === 'all' ? '' : ` [${vestingMode}]`;
-                showInAppNotification('Max Amount', `Maximum sendable${modeText}: ${maxAlphaStr} ALPHA (${availableUtxos.length} UTXOs, ${feesAlphaStr} ALPHA in fees)`, 'info');
+                showInAppNotification('Max Amount', `Maximum sendable${modeText}: ${maxAlphaStr} ALPHA (${usableUtxos.length} UTXOs, ${feesAlphaStr} ALPHA in fees)`, 'info');
             };
             
             // Prepare send transaction with enhanced debugging
@@ -12893,30 +12893,50 @@ Anyone with your master private key can access all your funds.`;
                     };
                 }
 
-                const single = usable
-                    .filter(u => BigInt(u.value) >= amount + FEE)
-                    .sort((a, b) => (BigInt(a.value) < BigInt(b.value) ? -1 : BigInt(a.value) > BigInt(b.value) ? 1 : 0))[0];
-                const chosen = [];   // { utxo, send }
+                // Each coin i can send between DUST and max_i = value_i - FEE. Use the fewest
+                // coins that can carry the amount: one coin when any covers it (the smallest
+                // such coin, so large coins stay whole), otherwise the k largest coins, for the
+                // smallest k with k * DUST <= amount <= sum of their max_i.
+                const maxOf = u => BigInt(u.value) - FEE;
+                const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+                let chosen = null;   // [{ utxo, send }]
+                const single = usable.filter(u => maxOf(u) >= amount).sort((x, y) => cmp(maxOf(x), maxOf(y)))[0];
                 if (single) {
-                    chosen.push({ utxo: single, send: amount });
+                    chosen = [{ utxo: single, send: amount }];
                 } else {
-                    const byValueDesc = [...usable].sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : BigInt(b.value) < BigInt(a.value) ? -1 : 0));
-                    let remaining = amount;
-                    for (const utxo of byValueDesc) {
-                        if (remaining <= 0n) break;
-                        const full = BigInt(utxo.value) - FEE;
-                        const send = full < remaining ? full : remaining;
-                        chosen.push({ utxo, send });
-                        remaining -= send;
+                    const byValueDesc = [...usable].sort((x, y) => cmp(maxOf(y), maxOf(x)));
+                    let capacity = 0n;
+                    for (let k = 1; k <= byValueDesc.length; k++) {
+                        capacity += maxOf(byValueDesc[k - 1]);
+                        if (capacity < amount) continue;
+                        if (DUST * BigInt(k) > amount) break;   // more coins only raises the minimum
+                        chosen = byValueDesc.slice(0, k).map(utxo => ({ utxo, send: DUST }));
+                        let extra = amount - DUST * BigInt(k);
+                        for (const c of chosen) {
+                            const add = extra < maxOf(c.utxo) - c.send ? extra : maxOf(c.utxo) - c.send;
+                            c.send += add;
+                            extra -= add;
+                        }
+                        // A partly used coin whose leftover is dust would pay it as fee: move
+                        // value to a coin with room so the leftover becomes real change.
+                        for (const c of chosen) {
+                            const left = maxOf(c.utxo) - c.send;
+                            if (left === 0n || left >= DUST) continue;
+                            const move = DUST - left;
+                            const taker = chosen.find(t => t !== c && maxOf(t.utxo) - t.send >= move &&
+                                (maxOf(t.utxo) - t.send - move === 0n || maxOf(t.utxo) - t.send - move >= DUST));
+                            if (taker && c.send - move >= DUST) {
+                                c.send -= move;
+                                taker.send += move;
+                            }
+                        }
+                        break;
                     }
-                    // A last transaction carrying less than the dust limit would be rejected:
-                    // move the shortfall from the previous transaction, which then keeps
-                    // the moved amount as change (or as fee if that change is itself dust).
-                    const last = chosen[chosen.length - 1];
-                    if (chosen.length > 1 && last.send < DUST) {
-                        const shift = DUST - last.send;
-                        chosen[chosen.length - 2].send -= shift;
-                        last.send = DUST;
+                    if (!chosen) {
+                        return {
+                            success: false,
+                            error: `This amount cannot be split across your coins without a part below the dust limit of ${DUST} satoshis. Try a slightly larger or smaller amount.`
+                        };
                     }
                 }
 
@@ -12947,7 +12967,7 @@ Anyone with your master private key can access all your funds.`;
                         tx.outputs.some(o => BigInt(o.value) < DUST)) {
                         return { success: false, error: 'Internal error: transaction plan does not balance. Nothing was sent.' };
                     }
-                    delivered += SatoshiMath.sum(tx.outputs.filter(o => o.address === recipientAddress).map(o => o.value));
+                    delivered += BigInt(tx.outputs[0].value);   // outputs[0] is the recipient; change may share its address
                 }
                 if (delivered !== amount) {
                     return { success: false, error: 'Internal error: transaction plan amount mismatch. Nothing was sent.' };
