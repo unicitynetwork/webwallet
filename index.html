@@ -12900,7 +12900,9 @@ Anyone with your master private key can access all your funds.`;
                 const maxOf = u => BigInt(u.value) - FEE;
                 const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
                 let chosen = null;   // [{ utxo, send }]
-                const single = usable.filter(u => maxOf(u) >= amount).sort((x, y) => cmp(maxOf(x), maxOf(y)))[0];
+                const covering = usable.filter(u => maxOf(u) >= amount).sort((x, y) => cmp(maxOf(x), maxOf(y)));
+                const cleanLeftover = u => maxOf(u) - amount === 0n || maxOf(u) - amount >= DUST;
+                const single = covering.find(cleanLeftover) || covering[0];   // prefer change over dust paid as fee
                 if (single) {
                     chosen = [{ utxo: single, send: amount }];
                 } else {
@@ -12928,6 +12930,15 @@ Anyone with your master private key can access all your funds.`;
                             if (taker && c.send - move >= DUST) {
                                 c.send -= move;
                                 taker.send += move;
+                                continue;
+                            }
+                            // Otherwise spend this coin fully and take its leftover from a coin
+                            // that stays above the dust limit with a clean leftover of its own.
+                            const giver = chosen.find(g => g !== c && g.send - left >= DUST &&
+                                (maxOf(g.utxo) - g.send + left === 0n || maxOf(g.utxo) - g.send + left >= DUST));
+                            if (giver) {
+                                giver.send -= left;
+                                c.send += left;
                             }
                         }
                         break;
